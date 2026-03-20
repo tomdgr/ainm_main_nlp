@@ -13,18 +13,18 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from src.models import SolveRequest, SolveResponse
 from src.services.agent_service import AgentService
-from src.services.api_search import ApiSearchService
+# from src.services.api_search import ApiSearchService
+from src.services.leaderboard import LeaderboardService
 from src.services.openapi_spec import OpenAPISpecSearcher
 from src.utils.logging import setup_logging
 
 setup_logging()
 
-logfire_key = os.getenv("LOGFIRE_API_KEY")
-if logfire_key:
-    logfire.configure(token=logfire_key, send_to_logfire="if-token-present")
-    logfire.instrument_pydantic_ai()
-else:
-    logfire.configure(send_to_logfire=False)
+logfire.configure(
+    token=os.getenv("LOGFIRE_TOKEN"),
+    send_to_logfire="if-token-present",
+)
+logfire.instrument_pydantic_ai()
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +37,15 @@ bearer_scheme = HTTPBearer(auto_error=False)
 spec_searcher = OpenAPISpecSearcher()
 spec_searcher.load()
 
-api_search = ApiSearchService()
-api_search.load()
+# api_search = ApiSearchService()
+# api_search.load()
+
+# Leaderboard service for auto-detecting task IDs
+leaderboard = LeaderboardService()
+logger.info(f"Leaderboard tracking enabled for team {LeaderboardService.TEAM_ID}")
 
 # Create agent service
-agent_service = AgentService(spec_searcher=spec_searcher, api_search=api_search)
+agent_service = AgentService(spec_searcher=spec_searcher, api_search=None, leaderboard=leaderboard)
 
 app = FastAPI(title="Tripletex AI Agent", version="0.1.0")
 
@@ -65,9 +69,7 @@ def health():
 async def solve(request: SolveRequest):
 
     start = time.monotonic()
-    logger.info(
-        f"Received solve request | prompt length: {len(request.prompt)} | files: {len(request.files)}"
-    )
+    logger.info(f"Received solve request | {request.model_dump_json()}")
 
     result = await agent_service.solve(request)
 

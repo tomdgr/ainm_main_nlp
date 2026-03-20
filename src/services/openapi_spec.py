@@ -43,11 +43,21 @@ class OpenAPISpecSearcher:
         self._build_index()
         logger.info(f"Indexed {len(self._index)} endpoints from OpenAPI spec")
 
+    @staticmethod
+    def _is_beta(details: dict) -> bool:
+        """Check if an endpoint is marked as [BETA] in its summary."""
+        summary = details.get("summary", "")
+        return summary.upper().startswith("[BETA]")
+
     def _build_index(self):
-        """Build a flat search index of all endpoints."""
+        """Build a flat search index of all non-beta endpoints."""
+        beta_count = 0
         for path, methods in self._paths.items():
             for method, details in methods.items():
                 if method in ("get", "post", "put", "delete", "patch"):
+                    if self._is_beta(details):
+                        beta_count += 1
+                        continue
                     self._index.append({
                         "path": path,
                         "method": method.upper(),
@@ -56,6 +66,8 @@ class OpenAPISpecSearcher:
                         "operation_id": details.get("operationId", ""),
                         "details": details,
                     })
+        if beta_count:
+            logger.info(f"Skipped {beta_count} [BETA] endpoints (always return 403)")
 
     def search_endpoints(self, query: str, max_results: int = 8) -> str:
         """Search endpoints by keyword. Returns formatted text of matches."""
@@ -115,6 +127,9 @@ class OpenAPISpecSearcher:
 
         if not details:
             return f"Endpoint {method.upper()} {path} not found."
+
+        if self._is_beta(details):
+            return f"Endpoint {method.upper()} {path} is a [BETA] endpoint and will return 403 Forbidden. Use a non-beta alternative."
 
         lines = [f"{method.upper()} {path}", f"Summary: {details.get('summary', 'N/A')}", ""]
 

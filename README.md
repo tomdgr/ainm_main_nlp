@@ -61,6 +61,15 @@ gcloud auth application-default login
 
 ### 4. Run locally
 
+The Tripletex API requires HTTPS. Use the local HTTPS script (generates self-signed certs via `mkcert` on first run):
+
+```bash
+./run_local.sh
+```
+
+This starts uvicorn with HTTPS on `https://localhost:8000` with auto-reload.
+
+Alternatively, without HTTPS (won't work for Tripletex API calls):
 ```bash
 uv run uvicorn src.main:app --port 8000
 ```
@@ -69,11 +78,11 @@ uv run uvicorn src.main:app --port 8000
 
 ### Game Simulator
 
-The simulator runs task prompts against your local agent and verifies results via the Tripletex sandbox API — mimicking the competition's field-by-field scoring.
+The simulator runs task prompts against your local HTTPS agent and verifies results via the Tripletex sandbox API — mimicking the competition's field-by-field scoring.
 
 ```bash
-# 1. Start the agent
-uv run uvicorn src.main:app --port 8000
+# 1. Start the agent (HTTPS)
+./run_local.sh
 
 # 2. Open notebooks/simulator.ipynb and run cells
 ```
@@ -142,6 +151,15 @@ Each agent run is logged to timestamped files:
 Download cloud logs:
 ```bash
 ./download_logs.sh
+```
+
+View Cloud Run console logs:
+```bash
+# Latest 50 log entries
+gcloud run services logs read tripletex-agent --region europe-north1 --project ainm26osl-708 --limit 50
+
+# Live tail
+gcloud beta run services logs tail tripletex-agent --region europe-north1 --project ainm26osl-708
 ```
 
 ### Manual Testing

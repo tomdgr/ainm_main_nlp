@@ -60,7 +60,7 @@ class GameSimulator:
 
     def __init__(
         self,
-        agent_url: str = "http://localhost:8000",
+        agent_url: str = "https://localhost:8000",
         base_url: str | None = None,
         session_token: str | None = None,
         agent_api_key: str | None = None,
@@ -88,7 +88,7 @@ class GameSimulator:
         headers = {}
         if self.agent_api_key:
             headers["Authorization"] = f"Bearer {self.agent_api_key}"
-        with httpx.Client(timeout=300) as client:
+        with httpx.Client(timeout=300, verify=False) as client:
             resp = client.post(f"{self.agent_url}/solve", json=payload, headers=headers)
             return resp.json()
 

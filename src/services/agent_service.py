@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 
 from anthropic import AsyncAnthropicVertex
 from pydantic_ai import Agent, RunContext, UsageLimits
@@ -13,7 +14,9 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from src.models import FileAttachment, SolveRequest
 from src.prompts.system_prompt import get_system_prompt
-from src.services.api_search import ApiSearchService
+
+# from src.services.api_search import ApiSearchService
+from src.services.leaderboard import LeaderboardService
 from src.services.openapi_spec import OpenAPISpecSearcher
 from src.services.tripletex_client import TripletexClient
 from src.utils.logging import RunLogger
@@ -27,7 +30,7 @@ class AgentDeps:
 
     tripletex_client: TripletexClient
     spec_searcher: OpenAPISpecSearcher
-    api_search: ApiSearchService
+    # api_search: ApiSearchService
     run_logger: RunLogger
     files: list[FileAttachment] = field(default_factory=list)
 
@@ -36,10 +39,14 @@ class AgentService:
     """PydanticAI agent that interprets accounting prompts and executes Tripletex API calls."""
 
     def __init__(
-        self, spec_searcher: OpenAPISpecSearcher, api_search: ApiSearchService
+        self,
+        spec_searcher: OpenAPISpecSearcher,
+        api_search=None,  # ApiSearchService, disabled for now
+        leaderboard: LeaderboardService | None = None,
     ):
         self.spec_searcher = spec_searcher
         self.api_search = api_search
+        self.leaderboard = leaderboard
         self.model = self._create_model()
         self.agent = self._create_agent()
 
@@ -235,7 +242,7 @@ class AgentService:
             deps = AgentDeps(
                 tripletex_client=client,
                 spec_searcher=self.spec_searcher,
-                api_search=self.api_search,
+                # api_search=self.api_search,
                 run_logger=run_logger,
                 files=request.files,
             )
@@ -245,7 +252,7 @@ class AgentService:
             result = await self.agent.run(
                 user_message,
                 deps=deps,
-                usage_limits=UsageLimits(request_limit=100, tool_calls_limit=50),
+                usage_limits=UsageLimits(request_limit=100, tool_calls_limit=100),
             )
 
             duration = time.monotonic() - start_time
@@ -297,4 +304,39 @@ class AgentService:
 
         finally:
             await client.close()
+            # Finalize timestamp to run END time (not start time)
+            run_logger.finalize()
+
+            if run_logger.task_id:
+                # Simulator or explicit task_id — save immediately
+                await run_logger.save()
+            elif self.leaderboard:
+                # Competition run — detect in background (leaderboard updates after we return)
+                import asyncio
+
+                run_end_time = datetime.now(timezone.utc)
+                logger.info(
+                    f"Starting background task detection (run ended at {run_end_time.isoformat()})..."
+                )
+                asyncio.create_task(self._detect_and_save(run_logger, run_end_time))
+            else:
+                await run_logger.save()
+
+    async def _detect_and_save(self, run_logger, run_end_time: datetime):
+        """Background task: retry leaderboard detection then save logs."""
+        try:
+            detected_task, attempts = await self.leaderboard.detect_task(run_end_time)
+            if detected_task:
+                run_logger.task_id = detected_task
+                run_logger.attempt_number = attempts
+                logger.info(
+                    f"Background detection: {detected_task} (attempt #{attempts})"
+                )
+            else:
+                logger.warning(
+                    "Background detection: no match — saving to unclassified/"
+                )
+        except Exception as e:
+            logger.error(f"Background detection failed: {e}")
+        finally:
             await run_logger.save()

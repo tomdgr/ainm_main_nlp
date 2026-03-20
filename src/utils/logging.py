@@ -89,7 +89,8 @@ class RunLogger:
     def __init__(self, task_id: str | None = None):
         self.host_prefix = _get_host_prefix()
         self.task_id = task_id  # Optional subfolder for task-specific logs
-        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
+        self.attempt_number: int = 0  # Set by leaderboard detection
+        self.timestamp: str | None = None  # Set at finalize() with end-time
         self._run_buf = io.StringIO()
         self._console_buf = io.StringIO()
 
@@ -148,10 +149,17 @@ class RunLogger:
     def log_error(self, error: str):
         self.log("ERROR", error)
 
-    # -- Save --
+    # -- Finalize & Save --
+
+    def finalize(self):
+        """Set the final timestamp to NOW (run end time). Call before save()."""
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
 
     async def save(self):
         """Persist both log files to local disk or GCS."""
+        # Ensure timestamp is set (fallback if finalize() wasn't called)
+        if not self.timestamp:
+            self.finalize()
         # Detach the console handler
         logging.getLogger().removeHandler(self._log_handler)
 
@@ -164,16 +172,21 @@ class RunLogger:
     def _log_subdir(self) -> str:
         """Build the log subdirectory path, including task_id if set."""
         parts = ["runs", self.host_prefix]
-        if self.task_id:
-            parts.append(self.task_id)
+        task = self.task_id or "unclassified"
+        parts.append(task)
         return os.path.join(*parts)
+
+    def _file_prefix(self) -> str:
+        """Build filename prefix: no_{attempt}_{timestamp}."""
+        return f"no_{self.attempt_number}_{self.timestamp}"
 
     def _save_local(self):
         log_dir = os.path.join(LOG_BASE, self._log_subdir())
         os.makedirs(log_dir, exist_ok=True)
 
-        run_path = os.path.join(log_dir, f"{self.timestamp}_run.txt")
-        console_path = os.path.join(log_dir, f"{self.timestamp}_console.txt")
+        prefix = self._file_prefix()
+        run_path = os.path.join(log_dir, f"{prefix}_run.txt")
+        console_path = os.path.join(log_dir, f"{prefix}_console.txt")
 
         with open(run_path, "w") as f:
             f.write(self._run_buf.getvalue())
@@ -194,15 +207,16 @@ class RunLogger:
             client = storage.Client()
             bucket = client.bucket(bucket_name)
 
-            prefix = self._log_subdir()
+            subdir = self._log_subdir()
+            file_prefix = self._file_prefix()
 
-            run_blob = bucket.blob(f"{prefix}/{self.timestamp}_run.txt")
+            run_blob = bucket.blob(f"{subdir}/{file_prefix}_run.txt")
             run_blob.upload_from_string(self._run_buf.getvalue(), content_type="text/plain")
 
-            console_blob = bucket.blob(f"{prefix}/{self.timestamp}_console.txt")
+            console_blob = bucket.blob(f"{subdir}/{file_prefix}_console.txt")
             console_blob.upload_from_string(self._console_buf.getvalue(), content_type="text/plain")
 
-            logging.getLogger(__name__).info(f"Run logs uploaded to gs://{bucket_name}/{prefix}/{self.timestamp}_*.txt")
+            logging.getLogger(__name__).info(f"Run logs uploaded to gs://{bucket_name}/{subdir}/{file_prefix}_*.txt")
         except Exception as e:
             logging.getLogger(__name__).error(f"Failed to upload logs to GCS: {e}, falling back to local")
             self._save_local()
