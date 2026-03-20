@@ -13,6 +13,7 @@ from pydantic_ai.providers.anthropic import AnthropicProvider
 
 from src.models import FileAttachment, SolveRequest
 from src.prompts.system_prompt import get_system_prompt
+from src.services.api_search import ApiSearchService
 from src.services.openapi_spec import OpenAPISpecSearcher
 from src.services.tripletex_client import TripletexClient
 from src.utils.logging import RunLogger
@@ -26,6 +27,7 @@ class AgentDeps:
 
     tripletex_client: TripletexClient
     spec_searcher: OpenAPISpecSearcher
+    api_search: ApiSearchService
     run_logger: RunLogger
     files: list[FileAttachment] = field(default_factory=list)
 
@@ -33,8 +35,11 @@ class AgentDeps:
 class AgentService:
     """PydanticAI agent that interprets accounting prompts and executes Tripletex API calls."""
 
-    def __init__(self, spec_searcher: OpenAPISpecSearcher):
+    def __init__(
+        self, spec_searcher: OpenAPISpecSearcher, api_search: ApiSearchService
+    ):
         self.spec_searcher = spec_searcher
+        self.api_search = api_search
         self.model = self._create_model()
         self.agent = self._create_agent()
 
@@ -134,6 +139,31 @@ class AgentService:
             ctx.deps.run_logger.log_tool_result("search_api_spec", result)
             return result
 
+        """
+            NOTE: A new search tool. Currently testing search_api under but for now the search_api_spec seems to work as good
+        """
+        # @agent.tool
+        # def search_api(
+        #     ctx: RunContext[AgentDeps],
+        #     query: str,
+        # ) -> str:
+        #     """Search the Tripletex API for relevant endpoints.
+
+        #     Returns endpoints grouped by path with all available HTTP methods, parameters, and body schema names.
+        #     Uses both keyword and semantic search for best results.
+
+        #     Args:
+        #         ctx: The run context with dependencies.
+        #         query: Search query — entity type, action, or concept (e.g., "supplier", "invoice payment", "employee employment").
+
+        #     Returns:
+        #         Grouped endpoint listing with methods, summaries, params, and schema names.
+        #     """
+        #     ctx.deps.run_logger.log_tool_call("search_api", {"query": query})
+        #     result = ctx.deps.api_search.search(query)
+        #     ctx.deps.run_logger.log_tool_result("search_api", result)
+        #     return result
+
         @agent.tool
         def get_endpoint_detail(
             ctx: RunContext[AgentDeps],
@@ -189,7 +219,7 @@ class AgentService:
 
     async def solve(self, request: SolveRequest) -> dict:
         """Execute an accounting task described in the prompt."""
-        run_logger = RunLogger()
+        run_logger = RunLogger(task_id=request.task_id)
         start_time = time.monotonic()
 
         run_logger.log_prompt(request.prompt, len(request.files))
@@ -205,6 +235,7 @@ class AgentService:
             deps = AgentDeps(
                 tripletex_client=client,
                 spec_searcher=self.spec_searcher,
+                api_search=self.api_search,
                 run_logger=run_logger,
                 files=request.files,
             )
@@ -214,7 +245,7 @@ class AgentService:
             result = await self.agent.run(
                 user_message,
                 deps=deps,
-                usage_limits=UsageLimits(request_limit=100),
+                usage_limits=UsageLimits(request_limit=100, tool_calls_limit=50),
             )
 
             duration = time.monotonic() - start_time

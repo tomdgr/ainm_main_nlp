@@ -86,8 +86,9 @@ class RunLogger:
     Set LOG_HOST env var to override the folder prefix (defaults to K_SERVICE on Cloud Run, or "local").
     """
 
-    def __init__(self):
+    def __init__(self, task_id: str | None = None):
         self.host_prefix = _get_host_prefix()
+        self.task_id = task_id  # Optional subfolder for task-specific logs
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")[:-3]
         self._run_buf = io.StringIO()
         self._console_buf = io.StringIO()
@@ -160,8 +161,15 @@ class RunLogger:
         else:
             self._save_local()
 
+    def _log_subdir(self) -> str:
+        """Build the log subdirectory path, including task_id if set."""
+        parts = ["runs", self.host_prefix]
+        if self.task_id:
+            parts.append(self.task_id)
+        return os.path.join(*parts)
+
     def _save_local(self):
-        log_dir = os.path.join(LOG_BASE, "runs", self.host_prefix)
+        log_dir = os.path.join(LOG_BASE, self._log_subdir())
         os.makedirs(log_dir, exist_ok=True)
 
         run_path = os.path.join(log_dir, f"{self.timestamp}_run.txt")
@@ -186,7 +194,7 @@ class RunLogger:
             client = storage.Client()
             bucket = client.bucket(bucket_name)
 
-            prefix = f"runs/{self.host_prefix}"
+            prefix = self._log_subdir()
 
             run_blob = bucket.blob(f"{prefix}/{self.timestamp}_run.txt")
             run_blob.upload_from_string(self._run_buf.getvalue(), content_type="text/plain")

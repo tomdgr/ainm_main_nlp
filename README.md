@@ -6,9 +6,9 @@ AI agent for the NM i AI 2026 Tripletex challenge. Receives natural-language acc
 
 ```
 POST /solve → FastAPI (Bearer auth) → PydanticAI Agent (Claude Opus 4.6 via Vertex AI)
-                                            ├── tripletex_api tool    → Tripletex REST API (via proxy)
-                                            ├── search_api_spec tool  → OpenAPI spec keyword search
-                                            └── get_endpoint_detail   → Full endpoint schema lookup
+                                            ├── tripletex_api tool   → Tripletex REST API (via proxy)
+                                            ├── search_api tool      → Hybrid BM25 + semantic search over OpenAPI spec
+                                            └── get_endpoint_detail  → Full endpoint schema lookup
 ```
 
 ## Project Structure
@@ -20,15 +20,22 @@ src/
   services/
     agent_service.py           # PydanticAI agent with tools
     tripletex_client.py        # Async HTTP client for Tripletex API
-    openapi_spec.py            # OpenAPI spec loader and search
+    api_search.py              # Hybrid BM25 + semantic endpoint search
+    openapi_spec.py            # Legacy keyword search (fallback)
   prompts/
-    system_prompt.py           # Curated system prompt with endpoint reference
+    system_prompt.py           # System prompt with strategy and lessons learned
   utils/
     logging.py                 # Structured logging + per-run file logs (local/GCS)
+  simulator/
+    game_simulator.py          # Local testing simulator
+    models.py                  # Check, TaskResult, SimulatorReport
+    tasks/                     # Task definitions with prompts and verification checks
 Dockerfile                     # Python 3.13 + uv, runs on port 8080
 deploy.sh                      # One-command Cloud Run deployment
 notebooks/
-  test_agent.ipynb             # Manual testing against sandbox
+  simulator.ipynb              # Run simulator against local agent
+  test_tasks.ipynb             # Manual single-task testing
+  test_agent.ipynb             # Ad-hoc sandbox exploration
 ```
 
 ## Quick Start
@@ -46,12 +53,6 @@ cp .env.example .env
 # Edit .env with your values
 ```
 
-Required variables:
-```
-GOOGLE_CLOUD_PROJECT=ainm26osl-708
-GOOGLE_CLOUD_LOCATION=global
-```
-
 ### 3. Authenticate with GCP
 
 ```bash
@@ -64,87 +65,113 @@ gcloud auth application-default login
 uv run uvicorn src.main:app --port 8000
 ```
 
-### 5. Test with curl
+## Testing & Simulation
+
+### Game Simulator
+
+The simulator runs task prompts against your local agent and verifies results via the Tripletex sandbox API — mimicking the competition's field-by-field scoring.
 
 ```bash
-curl -X POST http://localhost:8000/solve \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Opprett en ansatt med navn Ola Nordmann, ola@example.org.",
-    "files": [],
-    "tripletex_credentials": {
-      "base_url": "https://kkpqfuj-amager.tripletex.dev/v2",
-      "session_token": "YOUR_TOKEN"
-    }
-  }'
+# 1. Start the agent
+uv run uvicorn src.main:app --port 8000
+
+# 2. Open notebooks/simulator.ipynb and run cells
 ```
 
-### 6. Expose locally for testing (optional)
+Or from Python:
 
+```python
+from src.simulator.game_simulator import GameSimulator
+
+sim = GameSimulator(agent_url="http://localhost:8000")
+
+# Run all tasks
+report = await sim.run_all()
+
+# Run a single task
+result = await sim.run_task("task_4")
+
+# Run a subset
+report = await sim.run_all(task_ids=["task_4", "task_6", "task_8"])
+```
+
+**Available tasks:**
+
+| Task ID | Name | Tier | What it tests |
+|---------|------|------|---------------|
+| `task_1` | Create Departments | 1 | Create 3 departments by name |
+| `task_2` | Create Customer | 1 | Customer with name, org number, address, email |
+| `task_4` | Create Supplier | 1 | Supplier via /supplier endpoint |
+| `task_6` | Create & Send Invoice | 2 | Customer + product + order + invoice + send |
+| `task_7` | Register Payment | 2 | Find existing invoice, register full payment |
+| `task_8` | Create Project | 2 | Project with customer and project manager |
+
+**Simulator output:**
+
+```
+============================================================
+SIMULATOR REPORT
+============================================================
+Task         Checks     Calls      Errors   Score    Max
+------------------------------------------------------------
+task_1       6/6        3          0        1.67     2.0
+task_2       7/7        1          0        2.00     2.0
+task_4       5/5        1          0        2.00     2.0
+task_6       5/5        5          0        4.00     4.0
+task_7       5/5        4          0        4.00     4.0
+task_8       7/7        3          0        4.00     4.0
+------------------------------------------------------------
+TOTAL                                       17.67    18.0
+============================================================
+```
+
+### Iteration Workflow
+
+1. Make changes to `src/prompts/system_prompt.py` or `src/services/agent_service.py`
+2. Restart the server (`uvicorn` auto-reloads on file changes)
+3. Run the simulator to check scores
+4. If scores improve → deploy: `./deploy.sh`
+5. Submit on [app.ainm.no](https://app.ainm.no/submit/tripletex) to get official scores
+
+### Run Logs
+
+Each agent run is logged to timestamped files:
+- **Local**: `src/logs/runs/local/{task_id}/YYYYMMDD_HHMMSS_run.txt`
+- **Cloud Run**: `gs://{LOG_BUCKET}/runs/{service}/{revision}/YYYYMMDD_HHMMSS_run.txt`
+
+Download cloud logs:
 ```bash
-npx cloudflared tunnel --url http://localhost:8000
+./download_logs.sh
 ```
+
+### Manual Testing
+
+For ad-hoc testing without the simulator:
+- `notebooks/test_tasks.ipynb` — sends specific prompts per task type
+- `notebooks/test_agent.ipynb` — general sandbox exploration
 
 ## Deployment
 
-### Prerequisites
-
-```bash
-# Authenticate with GCP
-gcloud auth login
-gcloud config set project ainm26osl-708
-
-# Ensure Cloud Run API is enabled
-gcloud services enable run.googleapis.com
-```
-
 ### Deploy
-
-The deploy script reads from `.env` and passes all necessary env vars to Cloud Run:
 
 ```bash
 ./deploy.sh
 ```
 
-This will:
-1. Build the Docker image from source
-2. Deploy to Cloud Run in `europe-north1` with 1Gi memory, 300s timeout
-3. Set all env vars (GCP project, Logfire, logging, auth key)
-4. Print the service URL
+Reads `.env`, builds Docker image, deploys to Cloud Run in `europe-north1`.
 
 ### Auth Setup
 
-The `/solve` endpoint is protected with a Bearer token. Set `AGENT_API_KEY` in your `.env`:
+Set `AGENT_API_KEY` in `.env` and use the same key when submitting at app.ainm.no:
 
 ```
 AGENT_API_KEY=your-secret-key-here
 ```
 
-When submitting your endpoint URL at [app.ainm.no](https://app.ainm.no/submit/tripletex), enter the same API key. The competition validator will send it as `Authorization: Bearer <your-api-key>` with each request.
-
-Without `AGENT_API_KEY` set, the endpoint is open (useful for local development).
-
-### Update deployment
-
-After code changes, just re-run:
+### View Cloud Run logs
 
 ```bash
-./deploy.sh
-```
-
-### View logs
-
-```bash
-gcloud run services logs read tripletex-agent --region europe-north1 --limit 50
-```
-
-Tail the logs
-```bash
-gcloud run services logs tail tripletex-agent  --project ainm26osl-708
-gcloud run services logs tail tripletex-agent --region europe-north1 --project ainm26osl-708
 gcloud beta run services logs tail tripletex-agent --region europe-north1 --project ainm26osl-708
-
-
 ```
 
 ## Environment Variables
@@ -153,22 +180,12 @@ gcloud beta run services logs tail tripletex-agent --region europe-north1 --proj
 |----------|-------------|---------|
 | `GOOGLE_CLOUD_PROJECT` | GCP project ID | `ainm26osl-708` |
 | `GOOGLE_CLOUD_LOCATION` | Vertex AI region | `global` |
-| `AGENT_API_KEY` | Bearer token for `/solve` auth (set same key on app.ainm.no) | *(none, open)* |
-| `LOGFIRE_API_KEY` | Logfire API key for PydanticAI tracing | - |
+| `AGENT_API_KEY` | Bearer token for `/solve` auth | *(none, open)* |
+| `LOGFIRE_API_KEY` | Logfire tracing token | - |
 | `LOG_FORMAT` | `json` for Cloud Run, `text` for local | `text` |
 | `LOG_LEVEL` | Logging level | `INFO` |
 | `LOG_STORAGE` | `local` for disk, `gcs` for Cloud Storage | `local` |
-| `LOG_BUCKET` | GCS bucket name (required if `LOG_STORAGE=gcs`) | - |
-| `LOG_HOST` | Folder prefix for run logs (auto-detects on Cloud Run) | `local` |
-
-## How It Works
-
-1. The competition validator sends a POST to `/solve` with a Bearer token, task prompt, optional file attachments, and Tripletex API credentials.
-2. The PydanticAI agent (Claude Opus 4.6) interprets the prompt and plans the API call sequence.
-3. The agent uses the `tripletex_api` tool to make REST calls to the Tripletex API via the provided proxy.
-4. If the agent encounters an unfamiliar endpoint, it can search the full OpenAPI spec (109K lines, 800 endpoints) via the `search_api_spec` tool.
-5. The endpoint returns `{"status": "completed"}` and the validator checks the results field-by-field.
-6. Each run is logged to a timestamped file (locally or in GCS) with full tool call traces.
+| `LOG_BUCKET` | GCS bucket name (if `LOG_STORAGE=gcs`) | - |
 
 ## Scoring
 
@@ -176,3 +193,4 @@ gcloud beta run services logs tail tripletex-agent --region europe-north1 --proj
 - **Tier multiplier**: Tier 1 (x1), Tier 2 (x2), Tier 3 (x3)
 - **Efficiency bonus**: Up to 2x for perfect scores with minimal API calls and zero 4xx errors
 - Max per task: 6.0 (perfect Tier 3 + best efficiency)
+- **Total leaderboard** = sum of best scores across all 30 task types

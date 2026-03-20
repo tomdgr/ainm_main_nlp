@@ -16,6 +16,7 @@ class SolveRequest(BaseModel):
     prompt: str
     files: list[FileAttachment] = []
     tripletex_credentials: TripletexCredentials
+    task_id: str | None = None  # Optional: used by simulator for log routing
 
 
 class SolveResponse(BaseModel):

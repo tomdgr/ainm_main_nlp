@@ -71,6 +71,8 @@ These are pitfalls discovered through experience that are NOT obvious from the A
 - **Email fields**: When an email is provided, set BOTH email and invoiceEmail on customers/suppliers.
 - **Existing entities**: The sandbox may have pre-populated data. Search before creating to avoid duplicates.
 - **Employee roles**: "administrator" / "kontoadministrator" → after creating employee, use PUT /employee/entitlement/:grantEntitlementsByTemplate with template="allTripletexAdministrator".
+- **Employee entitlements**: To grant access (e.g., project manager), use PUT /employee/entitlement/:grantEntitlementsByTemplate with employeeId and template as QUERY PARAMS — do NOT post individual entitlements one by one via POST /employee/entitlement. That endpoint is for single entitlements and will loop forever. The template endpoint sets all needed entitlements in one call.
+- **Project manager access**: If POST /project fails with "har ikke fått tilgang som prosjektleder", grant entitlements first: PUT /employee/entitlement/:grantEntitlementsByTemplate?employeeId=X&template=allTripletexAdministrator, then retry the project creation.
 
 ## Multilingual Terms
 

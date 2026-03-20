@@ -13,6 +13,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from src.models import SolveRequest, SolveResponse
 from src.services.agent_service import AgentService
+from src.services.api_search import ApiSearchService
 from src.services.openapi_spec import OpenAPISpecSearcher
 from src.utils.logging import setup_logging
 
@@ -32,12 +33,15 @@ AGENT_API_KEY = os.getenv("AGENT_API_KEY", "")
 # auto_error=False so unauthenticated requests don't 403 when no key is configured
 bearer_scheme = HTTPBearer(auto_error=False)
 
-# Load OpenAPI spec once at startup
+# Load search indices at startup
 spec_searcher = OpenAPISpecSearcher()
 spec_searcher.load()
 
+api_search = ApiSearchService()
+api_search.load()
+
 # Create agent service
-agent_service = AgentService(spec_searcher=spec_searcher)
+agent_service = AgentService(spec_searcher=spec_searcher, api_search=api_search)
 
 app = FastAPI(title="Tripletex AI Agent", version="0.1.0")
 
