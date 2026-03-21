@@ -33,20 +33,21 @@ class AgentDeps:
     tripletex_client: TripletexClient
     spec_searcher: OpenAPISpecSearcher
     api_validator: APIValidator
-    # api_search: ApiSearchService
     run_logger: RunLogger
     files: list[FileAttachment] = field(default_factory=list)
+    playbook_text: str = ""
+    call_history: list[str] = field(default_factory=list)
 
 
 class AgentService:
-    """PydanticAI agent that interprets accounting prompts and executes Tripletex API calls."""
+    """Single-phase PydanticAI agent with playbook injection."""
 
     def __init__(
         self,
         spec_searcher: OpenAPISpecSearcher,
         api_validator: APIValidator,
         run_history: RunHistoryService | None = None,
-        api_search=None,  # ApiSearchService, disabled for now
+        api_search=None,
         leaderboard: LeaderboardService | None = None,
     ):
         self.spec_searcher = spec_searcher
@@ -54,10 +55,12 @@ class AgentService:
         self.run_history = run_history
         self.api_search = api_search
         self.leaderboard = leaderboard
-        self.model = self._create_model()
-        self.agent = self._create_agent()
+        self.sonnet_model = self._create_model("claude-sonnet-4-6")
+        self.opus_model = self._create_model("claude-opus-4-6")
+        self.model = self.sonnet_model  # Sonnet for speed (< 300s timeout)
+        self.executor_agent = self._create_executor_agent()
 
-    def _create_model(self) -> AnthropicModel:
+    def _create_model(self, model_name: str = "claude-opus-4-6") -> AnthropicModel:
         project_id = os.getenv("GOOGLE_CLOUD_PROJECT", "ainm26osl-708")
         region = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
 
@@ -66,31 +69,47 @@ class AgentService:
             region=region,
         )
         provider = AnthropicProvider(anthropic_client=vertex_client)
-        return AnthropicModel("claude-opus-4-6", provider=provider)
+        return AnthropicModel(model_name, provider=provider)
 
-    def _create_agent(self) -> Agent:
+    # ------------------------------------------------------------------
+    # Executor agent (all tools: spec lookup + tripletex_api)
+    # ------------------------------------------------------------------
+
+    def _create_executor_agent(self) -> Agent:
+        """Agent that executes the plan. Has all tools including tripletex_api."""
         agent = Agent(
             self.model,
             system_prompt=get_system_prompt(),
             deps_type=AgentDeps,
             model_settings={
-                "temperature": 1.0,  # Required when thinking is enabled
+                "temperature": 1.0,
                 "max_tokens": 16000,
                 "anthropic_thinking": {
-                    "type": "enabled",
-                    "budget_tokens": 8000,
+                    "type": "adaptive",
                 },
+                "anthropic_effort": "medium",
                 "anthropic_cache_instructions": True,
                 "anthropic_cache_tool_definitions": True,
                 "parallel_tool_calls": True,
             },
         )
-        self._register_tools(agent)
+        self._register_executor_tools(agent)
         return agent
 
-    def _register_tools(self, agent: Agent):
+    def _register_executor_tools(self, agent: Agent):
+        """Register all tools including tripletex_api."""
 
-        @agent.tool
+        # Dynamic system prompt: inject task-specific playbook
+        @agent.system_prompt(dynamic=True)
+        def inject_playbook(ctx: RunContext[AgentDeps]) -> str:
+            if ctx.deps.playbook_text:
+                return (
+                    "\n\n## Task-Specific Playbook (follow closely)\n\n"
+                    + ctx.deps.playbook_text
+                )
+            return ""
+
+        @agent.tool(retries=5)
         async def tripletex_api(
             ctx: RunContext[AgentDeps],
             method: str,
@@ -123,7 +142,7 @@ class AgentService:
             )
 
             # --- Pre-validation: catch errors before making the HTTP call ---
-            warnings = ctx.deps.api_validator.validate(method, path, json_body)
+            warnings = ctx.deps.api_validator.validate(method, path, json_body, params)
             if warnings:
                 warning_text = "\n".join(f"  - {w}" for w in warnings)
                 ctx.deps.run_logger.log_validation_warning(method, path, warnings)
@@ -139,8 +158,13 @@ class AgentService:
                 ctx.deps.run_logger.log_tool_result("tripletex_api", result_str)
                 return result_str
 
-            # Strip read-only fields silently before sending
-            cleaned_body = ctx.deps.api_validator.strip_readonly_fields(method, path, json_body)
+            # Auto-fix known issues silently before sending
+            cleaned_body = ctx.deps.api_validator.strip_readonly_fields(
+                method, path, json_body
+            )
+            cleaned_body = ctx.deps.api_validator.fix_postings_rows(
+                method, path, cleaned_body
+            )
 
             result = await ctx.deps.tripletex_client.request(
                 method=method,
@@ -148,18 +172,32 @@ class AgentService:
                 params=params,
                 json_body=cleaned_body,
             )
+
+            # Track call in history
+            status = result.get("status_code", 0)
+            ctx.deps.call_history.append(f"{method.upper()} {path} -> {status}")
+
+            # Truncate verbose 200/201 responses to reduce context growth
+            if result.get("ok") and status in (200, 201):
+                value = result.get("body", {}).get("value")
+                if isinstance(value, dict) and len(json.dumps(value, default=str)) > 500:
+                    essential_keys = (
+                        "id", "version", "name", "number", "displayName",
+                        "invoiceNumber", "amount", "amountExcludingVat",
+                        "amountOutstanding", "startDate", "endDate",
+                        "supplierNumber", "customerNumber", "organizationNumber",
+                        "email", "invoiceEmail", "firstName", "lastName",
+                    )
+                    trimmed = {k: value[k] for k in essential_keys if k in value}
+                    result["body"]["value"] = trimmed
+
             result_str = json.dumps(result, ensure_ascii=False, default=str)
             ctx.deps.run_logger.log_tool_result("tripletex_api", result_str)
             return result_str
 
         @agent.tool
-        def search_api_spec(
-            ctx: RunContext[AgentDeps],
-            query: str,
-        ) -> str:
+        def search_api_spec(ctx: RunContext[AgentDeps], query: str) -> str:
             """Search the Tripletex OpenAPI specification for endpoint details.
-
-            Use this ONLY when you need to find an endpoint not covered in your system prompt reference.
 
             Args:
                 ctx: The run context with dependencies.
@@ -173,41 +211,13 @@ class AgentService:
             ctx.deps.run_logger.log_tool_result("search_api_spec", result)
             return result
 
-        """
-            NOTE: A new search tool. Currently testing search_api under but for now the search_api_spec seems to work as good
-        """
-        # @agent.tool
-        # def search_api(
-        #     ctx: RunContext[AgentDeps],
-        #     query: str,
-        # ) -> str:
-        #     """Search the Tripletex API for relevant endpoints.
-
-        #     Returns endpoints grouped by path with all available HTTP methods, parameters, and body schema names.
-        #     Uses both keyword and semantic search for best results.
-
-        #     Args:
-        #         ctx: The run context with dependencies.
-        #         query: Search query — entity type, action, or concept (e.g., "supplier", "invoice payment", "employee employment").
-
-        #     Returns:
-        #         Grouped endpoint listing with methods, summaries, params, and schema names.
-        #     """
-        #     ctx.deps.run_logger.log_tool_call("search_api", {"query": query})
-        #     result = ctx.deps.api_search.search(query)
-        #     ctx.deps.run_logger.log_tool_result("search_api", result)
-        #     return result
-
         @agent.tool
         def get_endpoint_detail(
-            ctx: RunContext[AgentDeps],
-            path: str,
-            method: str,
+            ctx: RunContext[AgentDeps], path: str, method: str
         ) -> str:
             """Get full details for a specific Tripletex API endpoint.
 
-            Use this to verify exact field names and types before making an API call
-            to an unfamiliar endpoint.
+            Use this to verify exact field names and types before making an API call.
 
             Args:
                 ctx: The run context with dependencies.
@@ -223,6 +233,10 @@ class AgentService:
             result = ctx.deps.spec_searcher.get_endpoint_details(path, method)
             ctx.deps.run_logger.log_tool_result("get_endpoint_detail", result)
             return result
+
+    # ------------------------------------------------------------------
+    # User message building
+    # ------------------------------------------------------------------
 
     def _build_user_message(self, request: SolveRequest) -> str | list:
         """Build the user message, including file attachments as multimodal content."""
@@ -251,10 +265,18 @@ class AgentService:
 
         return "\n".join(parts) if isinstance(parts[0], str) else parts
 
+    # ------------------------------------------------------------------
+    # Solve: classify → inject playbook → execute
+    # ------------------------------------------------------------------
+
     async def solve(self, request: SolveRequest) -> dict:
-        """Execute an accounting task described in the prompt."""
+        """Classify task, inject playbook if available, and execute."""
         run_logger = RunLogger(task_id=request.task_id)
         start_time = time.monotonic()
+
+        # Store file attachments (PDFs, images) alongside run logs
+        if request.files:
+            run_logger.store_files(request.files)
 
         run_logger.log_prompt(request.prompt, len(request.files))
         logger.info(f"Solving task: {request.prompt}...")
@@ -266,29 +288,54 @@ class AgentService:
         )
 
         try:
+            # Classify task and get playbook
+            playbook_text = ""
+            task_type = None
+            task_confidence = 0.0
+            if self.run_history:
+                task_type, task_confidence = self.run_history.classify_prompt(request.prompt)
+                lessons = self.run_history.get_lessons(request.prompt)
+                if lessons:
+                    playbook_text = lessons
+                    run_logger.log("LESSONS", f"Injected playbook for {task_type} (confidence={task_confidence:.2f})")
+
             deps = AgentDeps(
                 tripletex_client=client,
                 spec_searcher=self.spec_searcher,
                 api_validator=self.api_validator,
-                # api_search=self.api_search,
                 run_logger=run_logger,
                 files=request.files,
+                playbook_text=playbook_text,
             )
 
             user_message = self._build_user_message(request)
 
-            # Inject lessons from previous runs
-            if self.run_history:
-                lessons = self.run_history.get_lessons(request.prompt)
-                if lessons:
-                    if isinstance(user_message, str):
-                        user_message = lessons + "\n\n" + user_message
-                    elif isinstance(user_message, list):
-                        user_message = [lessons + "\n\n" + str(user_message[0])] + user_message[1:]
-                    run_logger.log("LESSONS", "Injected playbook for classified task")
+            # ---- Single-phase execution (no separate planner) ----
+            # The executor has ALL tools (spec lookup + API calls).
+            # Playbook is injected via dynamic system prompt.
+            # For unknown tasks, the executor discovers endpoints inline.
 
-            result = await self.agent.run(
-                user_message,
+            if playbook_text:
+                run_logger.log("PHASE", f"Executing with playbook ({task_type}, conf={task_confidence:.2f})")
+                context = (
+                    f"=== TASK PLAYBOOK ===\n{playbook_text}\n=== END PLAYBOOK ===\n\n"
+                    f"Follow this playbook as your guide. Use search_api_spec and get_endpoint_detail "
+                    f"to verify endpoints or find alternatives if the playbook approach doesn't work.\n\n"
+                )
+            else:
+                run_logger.log("PHASE", f"Executing without playbook (unknown task)")
+                context = (
+                    "No playbook available for this task. Use search_api_spec to discover the right "
+                    "endpoints, then get_endpoint_detail to verify field names before making API calls.\n\n"
+                )
+
+            if isinstance(user_message, str):
+                executor_message = context + user_message
+            else:
+                executor_message = [context + str(user_message[0])] + user_message[1:]
+
+            result = await self.executor_agent.run(
+                executor_message,
                 deps=deps,
                 usage_limits=UsageLimits(request_limit=100, tool_calls_limit=100),
             )
@@ -296,7 +343,7 @@ class AgentService:
             duration = time.monotonic() - start_time
             usage = result.usage()
 
-            # Log thinking blocks from the agent run
+            # Log thinking blocks from the executor run
             for msg in result.all_messages():
                 if isinstance(msg, ModelResponse):
                     for part in msg.parts:
@@ -342,14 +389,11 @@ class AgentService:
 
         finally:
             await client.close()
-            # Finalize timestamp to run END time (not start time)
             run_logger.finalize()
 
             if run_logger.task_id:
-                # Simulator or explicit task_id — save immediately
                 await run_logger.save()
             elif self.leaderboard:
-                # Competition run — detect in background (leaderboard updates after we return)
                 import asyncio
 
                 run_end_time = datetime.now(timezone.utc)
@@ -363,19 +407,30 @@ class AgentService:
     async def _detect_and_save(self, run_logger, run_end_time: datetime):
         """Background task: retry leaderboard detection then save logs."""
         try:
-            detected_task, attempts, prev_score, new_score = await self.leaderboard.detect_task(run_end_time)
+            (
+                detected_task,
+                attempts,
+                prev_score,
+                new_score,
+            ) = await self.leaderboard.detect_task(run_end_time)
             if detected_task:
                 run_logger.task_id = detected_task
                 run_logger.attempt_number = attempts
 
-                # Log score change in the run log
                 if new_score > prev_score:
-                    run_logger.log("SCORE", f"{detected_task}: {prev_score:.2f} → {new_score:.2f} ✓ IMPROVED (+{new_score - prev_score:.2f})")
+                    run_logger.log(
+                        "SCORE",
+                        f"{detected_task}: {prev_score:.2f} → {new_score:.2f} ✓ IMPROVED (+{new_score - prev_score:.2f})",
+                    )
                 elif new_score == prev_score:
-                    run_logger.log("SCORE", f"{detected_task}: {new_score:.2f} (no change)")
+                    run_logger.log(
+                        "SCORE", f"{detected_task}: {new_score:.2f} (no change)"
+                    )
                 else:
-                    # best_score never decreases, so this means benchmark recalculation
-                    run_logger.log("SCORE", f"{detected_task}: {prev_score:.2f} → {new_score:.2f} (benchmark recalculated)")
+                    run_logger.log(
+                        "SCORE",
+                        f"{detected_task}: {prev_score:.2f} → {new_score:.2f} (benchmark recalculated)",
+                    )
 
                 logger.info(
                     f"Background detection: {detected_task} (attempt #{attempts}, "

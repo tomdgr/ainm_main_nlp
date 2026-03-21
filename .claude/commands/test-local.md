@@ -12,21 +12,25 @@ The local HTTPS server must be running in another terminal:
 Run the test script with specific tasks or all tasks:
 
 ```bash
-python test_local.py                        # all tasks (task_1, task_2, task_4, task_6, task_7, task_8)
-python test_local.py task_1 task_2 task_4    # specific tasks (fast — tier 1 only)
-python test_local.py task_6 task_7 task_8    # tier 2 tasks (slower, more complex)
+python test_local.py                                    # all 8 tasks
+python test_local.py task_1 task_2 task_4               # quick tier 1 (fast, ~30s total)
+python test_local.py task_6 task_7 task_8               # tier 2 original tasks
+python test_local.py task_9 task_10                     # new tier 2 tasks (voucher + employee)
+python test_local.py task_1 task_2 task_4 task_9 task_10 # comprehensive check
 ```
 
 ## Available simulator tasks
 
 | Sim Task | Real Task | Name | Tier | What it tests |
 |----------|-----------|------|------|---------------|
-| task_1 | ~01-03 | Create Departments | 1 | Create 3 departments by name |
+| task_1 | ~05 | Create Departments | 1 | Create 3 departments by name |
 | task_2 | ~02 | Create Customer | 1 | Customer with name, org number, address, email |
 | task_4 | ~04 | Create Supplier | 1 | Supplier via /supplier endpoint |
 | task_6 | ~06 | Create & Send Invoice | 2 | Customer + product + order + invoice + send |
 | task_7 | ~07 | Register Payment | 2 | Find existing invoice, register full payment |
 | task_8 | ~08 | Create Project | 2 | Project with customer and project manager |
+| task_9 | ~22 | Post Expense Voucher | 2 | Voucher posting with account, department, VAT |
+| task_10 | ~01/19 | Create Employee (Full) | 2 | Employee + employment + salary + occupation code |
 
 ## What to look for in the output
 

@@ -1,0 +1,213 @@
+11:46:08 | INFO     | src.services.agent_service | Solving task: Ein av kundane dine har ein forfallen faktura. Finn den forfalne fakturaen og bokfor eit purregebyr pa 65 kr. Debet kundefordringar (1500), kredit purregebyr (3400). Opprett også ein faktura for purregebyret til kunden og send den. Registrer i tillegg ei delbetaling på 5000 kr på den forfalne fakturaen....
+11:46:08 | INFO     | src.services.run_history | Classified as task_06 (confidence=0.49), injecting playbook
+11:46:09 | ERROR    | src.services.agent_service | Task failed after 0.7s | API calls: 0 | API errors: 0 | Error: status_code: 400, model_name: claude-opus-4-6, body: {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.budget_tokens: Extra inputs are not permitted'}, 'request_id': 'req_vrtx_011CZGAohU2GUtLESKWGNKYM'}
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/anthropic.py", line 447, in _messages_create
+    return await self.client.beta.messages.create(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<19 lines>...
+    )
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/anthropic/resources/beta/messages/messages.py", line 2901, in create
+    return await self._post(
+           ^^^^^^^^^^^^^^^^^
+    ...<36 lines>...
+    )
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/anthropic/_base_client.py", line 1992, in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/anthropic/_base_client.py", line 1777, in request
+    raise self._make_status_error_from_response(err.response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.budget_tokens: Extra inputs are not permitted'}, 'request_id': 'req_vrtx_011CZGAohU2GUtLESKWGNKYM'}
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/src/services/agent_service.py", line 371, in solve
+    plan_result = await self.planner_agent.run(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/agent/abstract.py", line 271, in run
+    async with self.iter(
+               ~~~~~~~~~^
+        user_prompt=user_prompt,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<11 lines>...
+        builtin_tools=builtin_tools,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ) as agent_run:
+    ^
+  File "/usr/local/lib/python3.13/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py", line 745, in iter
+    graph.iter(
+    ~~~~~~~~~~^
+        inputs=user_prompt_node,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        infer_name=False,
+        ^^^^^^^^^^^^^^^^^
+    ) as graph_run,
+    ^
+  File "/usr/local/lib/python3.13/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 270, in iter
+    async with GraphRun[StateT, DepsT, OutputT](
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        graph=self,
+        ^^^^^^^^^^^
+    ...<3 lines>...
+        traceparent=traceparent,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ) as graph_run:
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 423, in __aexit__
+    await self._async_exit_stack.__aexit__(exc_type, exc_val, exc_tb)
+  File "/usr/local/lib/python3.13/contextlib.py", line 768, in __aexit__
+    raise exc
+  File "/usr/local/lib/python3.13/contextlib.py", line 749, in __aexit__
+    cb_suppress = cb(*exc_details)
+  File "/usr/local/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 981, in _unwrap_exception_groups
+    raise exception
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 750, in _run_tracked_task
+    result = await self._run_task(t_)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 782, in _run_task
+    output = await node.call(step_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/step.py", line 253, in _call_node
+    return await node.run(GraphRunContext(state=ctx.state, deps=ctx.deps))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py", line 466, in run
+    return await self._make_request(ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py", line 511, in _make_request
+    model_response = await ctx.deps.model.request(message_history, model_settings, model_request_parameters)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/instrumented.py", line 413, in request
+    response = await self.wrapped.request(messages, model_settings, model_request_parameters)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/anthropic.py", line 320, in request
+    response = await self._messages_create(messages, False, model_settings, model_request_parameters)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/anthropic.py", line 470, in _messages_create
+    raise ModelHTTPError(status_code=status_code, model_name=self.model_name, body=e.body) from e
+pydantic_ai.exceptions.ModelHTTPError: status_code: 400, model_name: claude-opus-4-6, body: {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.budget_tokens: Extra inputs are not permitted'}, 'request_id': 'req_vrtx_011CZGAohU2GUtLESKWGNKYM'}
+11:46:09 | INFO     | src.services.agent_service | Starting background task detection (run ended at 2026-03-21T11:46:09.225303+00:00)...
+11:46:09 | INFO     | src.main | Solve completed in 0.7s
+11:46:12 | INFO     | src.services.leaderboard | Scores uploaded to gs://tripletex-ai-agent-logs/runs/tripletex-agent/tripletex-agent-00040-tfl/initial_scores.json
+11:46:12 | INFO     | src.services.leaderboard | Scores uploaded to gs://tripletex-ai-agent-logs/runs/tripletex-agent/tripletex-agent-00040-tfl/latest_scores.json
+11:46:12 | INFO     | src.services.leaderboard | No unclaimed match (try 1/5), retrying in 3.0s...
+11:46:12 | INFO     | src.main | Received solve request | {"prompt":"Has recibido una carta de oferta (ver PDF adjunto) para un nuevo empleado. Completa la incorporacion: crea el empleado, asigna el departamento correcto, configura los detalles de empleo con porcentaje y salario anual, y configura las horas de trabajo estandar.","files":[{"filename":"files/tilbudsbrev_es_05.pdf","content_base64":"JVBERi0xLjMKJenr8b8KMSAwIG9iago8PAovQ291bnQgMQovS2lkcyBbMyAwIFJdCi9NZWRpYUJveCBbMCAwIDU5NS4yOCA4NDEuODldCi9UeXBlIC9QYWdlcwo+PgplbmRvYmoKMiAwIG9iago8PAovT3BlbkFjdGlvbiBbMyAwIFIgL0ZpdEggbnVsbF0KL1BhZ2VMYXlvdXQgL09uZUNvbHVtbgovUGFnZXMgMSAwIFIKL1R5cGUgL0NhdGFsb2cKPj4KZW5kb2JqCjMgMCBvYmoKPDwKL0NvbnRlbnRzIDQgMCBSCi9QYXJlbnQgMSAwIFIKL1Jlc291cmNlcyA3IDAgUgovVHlwZSAvUGFnZQo+PgplbmRvYmoKNCAwIG9iago8PAovRmlsdGVyIC9GbGF0ZURlY29kZQovTGVuZ3RoIDYwNwo+PgpzdHJlYW0KeJyNVMlu2zAQvecr5lKgBVqG1K7cGiROs7Vo4/Za0OFYpkOTLqk46Ef3HzqSbMtLWkiAQZmat8xwhhHcnHCW5vBycj6G05EAUTDOYTyFy3GzFfGEiQTyUjTLWMHb8fXd+fcL+HIPD/R6d/356h2M5+vw01EEQuwxxIQsII9zVmYtwe1coke4kSuNHq6kf/wj3+9wrAE8Y3nRAn5omEkPlUGFFuQKJNTaTH6DwgoCvRptK/oS3AI+ffvgpar0iqg1xSpsPsLts1UY0K/0I7I9v5Rx/IrfLEsZ7+QvsJZmjv4Q9lqaWZywlLewkVMBTVCydmf/r5DII1aKXaygohNfWYpBorRbRN3haFN7KpMJOFC0x0ZUh4JFPMqGiKZFuemIjzZgXTeaYer8YpjwDn4kQ709x0HaWcaSrpke1rCw9C6grQeK9wSCc8bfDFJNYpaXXcY+GGftQLEel8acHnga1EtpRItY601QKyqRGijZQ3OW0rQsaByW9FOyOiTgPcEv2IonecGK1jRnSUQBL80cmifpz2D/vGfOKKzBY/VsaK5DO6Cd34U2c2fcimbTVTBB5fW0RhsaK8FZaWbSqol7YkAzBtUcickDRdNhrpCyhaWETTfC1z1/GfVtO58xS4uk9beQFhuCBSqg1qJcSaahtUErXYFbLoOuOt9eh5rBJaXht2okTP8Oo2g3hjU1gxF6jZRNb6q3lCSsyNuiT5uoJdKt5GHqTLs0W20t2NFdF9PtyrshvCfvFGMN+Z1pMmGPr8Y4FSyO2/Cf/36OYbQkXR/SLbm5GtFuAv8CZTygYAplbmRzdHJlYW0KZW5kb2JqCjUgMCBvYmoKPDwKL0Jhc2VGb250IC9IZWx2ZXRpY2EtQm9sZAovRW5jb2RpbmcgL1dpbkFuc2lFbmNvZGluZwovU3VidHlwZSAvVHlwZTEKL1R5cGUgL0ZvbnQKPj4KZW5kb2JqCjYgMCBvYmoKPDwKL0Jhc2VGb250IC9IZWx2ZXRpY2EKL0VuY29kaW5nIC9XaW5BbnNpRW5jb2RpbmcKL1N1YnR5cGUgL1R5cGUxCi9UeXBlIC9Gb250Cj4+CmVuZG9iago3IDAgb2JqCjw8Ci9Gb250IDw8L0YxIDUgMCBSCi9GMiA2IDAgUj4+Ci9Qcm9jU2V0IFsvUERGIC9UZXh0IC9JbWFnZUIgL0ltYWdlQyAvSW1hZ2VJXQo+PgplbmRvYmoKOCAwIG9iago8PAovQ3JlYXRpb25EYXRlIChEOjIwMjYwMzA0MTkxODA1WikKPj4KZW5kb2JqCnhyZWYKMCA5CjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxNSAwMDAwMCBuIAowMDAwMDAwMTAyIDAwMDAwIG4gCjAwMDAwMDAyMDUgMDAwMDAgbiAKMDAwMDAwMDI4NSAwMDAwMCBuIAowMDAwMDAwOTY0IDAwMDAwIG4gCjAwMDAwMDEwNjYgMDAwMDAgbiAKMDAwMDAwMTE2MyAwMDAwMCBuIAowMDAwMDAxMjYwIDAwMDAwIG4gCnRyYWlsZXIKPDwKL1NpemUgOQovUm9vdCAyIDAgUgovSW5mbyA4IDAgUgovSUQgWzw2Qjg4Q0NCQ0I5OTBEMEVCODk3M0VEMTI1RDVGMTIyMT48NkI4OENDQkNCOTkwRDBFQjg5NzNFRDEyNUQ1RjEyMjE+XQo+PgpzdGFydHhyZWYKMTMxNQolJUVPRgo=","mime_type":"application/pdf"}],"tripletex_credentials":{"base_url":"https://tx-proxy-jwanbnu3pq-lz.a.run.app/v2","session_token":"tLfiykcz-V2qCFj_CPNUbvZsRc7zncnlxsJizuOcP-I"},"task_id":null}
+11:46:12 | INFO     | src.services.agent_service | Solving task: Has recibido una carta de oferta (ver PDF adjunto) para un nuevo empleado. Completa la incorporacion: crea el empleado, asigna el departamento correcto, configura los detalles de empleo con porcentaje y salario anual, y configura las horas de trabajo estandar....
+11:46:12 | INFO     | src.services.run_history | Classified as task_01 (confidence=0.38), injecting playbook
+11:46:13 | ERROR    | src.services.agent_service | Task failed after 0.4s | API calls: 0 | API errors: 0 | Error: status_code: 400, model_name: claude-opus-4-6, body: {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.budget_tokens: Extra inputs are not permitted'}, 'request_id': 'req_vrtx_011CZGAozuG636MjG4m2FCdj'}
+Traceback (most recent call last):
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/anthropic.py", line 447, in _messages_create
+    return await self.client.beta.messages.create(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<19 lines>...
+    )
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/anthropic/resources/beta/messages/messages.py", line 2901, in create
+    return await self._post(
+           ^^^^^^^^^^^^^^^^^
+    ...<36 lines>...
+    )
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/anthropic/_base_client.py", line 1992, in post
+    return await self.request(cast_to, opts, stream=stream, stream_cls=stream_cls)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/anthropic/_base_client.py", line 1777, in request
+    raise self._make_status_error_from_response(err.response) from None
+anthropic.BadRequestError: Error code: 400 - {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.budget_tokens: Extra inputs are not permitted'}, 'request_id': 'req_vrtx_011CZGAozuG636MjG4m2FCdj'}
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/app/src/services/agent_service.py", line 371, in solve
+    plan_result = await self.planner_agent.run(
+                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/agent/abstract.py", line 271, in run
+    async with self.iter(
+               ~~~~~~~~~^
+        user_prompt=user_prompt,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<11 lines>...
+        builtin_tools=builtin_tools,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ) as agent_run:
+    ^
+  File "/usr/local/lib/python3.13/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/agent/__init__.py", line 745, in iter
+    graph.iter(
+    ~~~~~~~~~~^
+        inputs=user_prompt_node,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+        infer_name=False,
+        ^^^^^^^^^^^^^^^^^
+    ) as graph_run,
+    ^
+  File "/usr/local/lib/python3.13/contextlib.py", line 235, in __aexit__
+    await self.gen.athrow(value)
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 270, in iter
+    async with GraphRun[StateT, DepsT, OutputT](
+               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        graph=self,
+        ^^^^^^^^^^^
+    ...<3 lines>...
+        traceparent=traceparent,
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    ) as graph_run:
+    ^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 423, in __aexit__
+    await self._async_exit_stack.__aexit__(exc_type, exc_val, exc_tb)
+  File "/usr/local/lib/python3.13/contextlib.py", line 768, in __aexit__
+    raise exc
+  File "/usr/local/lib/python3.13/contextlib.py", line 749, in __aexit__
+    cb_suppress = cb(*exc_details)
+  File "/usr/local/lib/python3.13/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 981, in _unwrap_exception_groups
+    raise exception
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 750, in _run_tracked_task
+    result = await self._run_task(t_)
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/graph.py", line 782, in _run_task
+    output = await node.call(step_context)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_graph/beta/step.py", line 253, in _call_node
+    return await node.run(GraphRunContext(state=ctx.state, deps=ctx.deps))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py", line 466, in run
+    return await self._make_request(ctx)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/_agent_graph.py", line 511, in _make_request
+    model_response = await ctx.deps.model.request(message_history, model_settings, model_request_parameters)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/instrumented.py", line 413, in request
+    response = await self.wrapped.request(messages, model_settings, model_request_parameters)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/anthropic.py", line 320, in request
+    response = await self._messages_create(messages, False, model_settings, model_request_parameters)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/app/.venv/lib/python3.13/site-packages/pydantic_ai/models/anthropic.py", line 470, in _messages_create
+    raise ModelHTTPError(status_code=status_code, model_name=self.model_name, body=e.body) from e
+pydantic_ai.exceptions.ModelHTTPError: status_code: 400, model_name: claude-opus-4-6, body: {'type': 'error', 'error': {'type': 'invalid_request_error', 'message': 'thinking.adaptive.budget_tokens: Extra inputs are not permitted'}, 'request_id': 'req_vrtx_011CZGAozuG636MjG4m2FCdj'}
+11:46:13 | INFO     | src.services.agent_service | Starting background task detection (run ended at 2026-03-21T11:46:13.340076+00:00)...
+11:46:13 | INFO     | src.main | Solve completed in 0.4s
+11:46:24 | INFO     | src.services.leaderboard | Scores uploaded to gs://tripletex-ai-agent-logs/runs/tripletex-agent/tripletex-agent-00040-tfl/latest_scores.json
+11:46:24 | INFO     | src.services.leaderboard | Detected task: task_21 (attempt #2, try 2/5, claimed 2026-03-21T11:46:17.392016+00:00, score 0.00 → 0.00)
+11:46:24 | INFO     | src.services.agent_service | Background detection: task_21 (attempt #2, score 0.00 → 0.00)

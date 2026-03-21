@@ -2,23 +2,92 @@
 
 Score progression and changes per Cloud Run revision. Only the latest revision's changes are uncommitted — older entries reflect what was deployed.
 
-## Revision 00020 (next deploy — uncommitted)
+## Revisions 00048–00052 — 2026-03-21
+
+**Score:** 57.75 → 65.26 (+7.52)
+
+**Key improvements:**
+- task_16: 2.67 → 4.00 (perfect — timesheet + project invoice)
+- task_27: 0.60 → 6.00 (perfect tier 3 — receipt/expense)
+- task_22: 0.00 → 6.00 (perfect tier 3 — receipt expense, new playbook + keywords)
+- task_26: 3.21 → 4.00 (currency exchange)
+- task_16: 2.67 → 4.00 (perfect — timesheet + invoice)
+- task_09: 3.00 → 3.00 (1 new attempt, no change)
+
+**Architecture changes:**
+- **Removed planner entirely** — single-phase execution. Executor handles endpoint discovery + API calls inline. Eliminated 10-100s planner overhead.
+- **Removed dynamic effort routing** — `effort=medium` for all tasks. Low effort gave marginal gains on simple tasks but hurt complex ones.
+- **Removed effort routing misclassification risk** — task_29 was being routed to `low` effort because it was classified as task_08.
+
+**Confirmed working:**
+- Single-phase execution: all runs complete under 300s (0 timeouts on non-PDF tasks)
+- Playbook injection: logged as `[PHASE] Executing with playbook (task_XX, conf=X.XX)`
+- Response truncation: context growth stays manageable on multi-step tasks
+- API search: weighted scoring finds correct endpoints
+
+**Still failing (0 points):**
+- task_19, task_20, task_21: PDF extraction tasks — compressed PDF content exhausts thinking tokens
+- task_23: Unknown task requirements (supplier creation succeeds but scores 0)
+- task_30: Year-end depreciation, complex multi-step
+
+**Biggest remaining opportunities:**
+- PDF handling (tasks 19-21): 18.0 potential points. Server-side PDF extraction needed.
+- task_11 (supplier invoice): 0/4.0 — agent uses wrong approach despite 8 attempts
+- task_13 (travel expense): 1.375/4.0 — unknown scoring gap
+- task_29 (project lifecycle): 1.64/6.0 — partially working but too complex for single run
+
+**Simulator expanded** to 16 tasks (was 8): added task_14 through task_18 and task_24 through task_26.
+
+---
+
+## Revisions 00032–00047 — 2026-03-21
+
+**Score:** 39.9 → 52.3 (+12.4, mostly from tier 3 release — new tasks became available)
+
+**Tier 1-2 improvements:**
+- task_10: 3.0 → 4.0 (inline invoice + payment)
+- task_17: 2.43 → 3.50 (accounting dimensions)
+
+**New tier 3 scores (tasks released during this period):**
+- task_25: 5.25/6.0 (overdue invoice + reminder fee)
+- task_26: 3.21/6.0 (currency exchange agio/disagio)
+- task_29: 1.09/6.0 (year-end adjustments)
+- task_28: 1.50/6.0 (expense analysis + projects)
+
+**Architecture changes:**
+- **Two-phase Plan→Execute** — Sonnet 4.6 planner (spec tools only) → Sonnet 4.6 executor (all tools). Planner SKIPPED when playbook confidence >= 0.5 (saves 10-100s).
+- **Dynamic effort routing** — `low` for simple tasks (task_02-05), `medium` default, `high` for complex/unknown. Uses Anthropic `effort` parameter.
+- **API search rewrite** — weighted scoring (path segments 5.0 > summary 2.0 > tags 1.0), method-aware boosting, synonym expansion. Fixed critical failures where "department create" and "project create" returned wrong endpoints.
+- **Response truncation** — 200/201 responses trimmed to essential fields (id, version, name, etc.) to reduce context growth.
+
+**Validator auto-fixes:**
+- `row=0` in voucher postings → auto-renumbered from 1
+- `amountGross != amountGrossCurrency` → auto-synced
+- `POST /project` without `projectManager` or `startDate` → blocked with fix instructions
+- `GET /ledger/postingByDate` with `fields` param → blocked (not supported)
+- `PUT /invoice/:payment` with body params → blocked (must be query params)
+
+**New playbooks added (25+ total):**
+- Tier 3: task_19 (employee from PDF), task_22 (receipt expense), task_24 (ledger error correction), task_25 (overdue invoice), task_26 (currency agio/disagio), task_28 (expense analysis + projects), task_29 (monthly closing), task_30 (year-end depreciation + tax)
+
+**Other:**
+- PDF/file attachments stored alongside run logs
+- `thinking.type=adaptive` (Vertex AI compatible, no budget_tokens)
+- Graceful handling of planner tool_calls_limit exceeded (partial plan extraction)
+- New simulator tasks: task_9 (voucher expense), task_10 (employee with full details)
+
+---
+
+## Revision 00020 — 2026-03-21
+
+**Score:** 39.6 (+0.5)
 
 **Changes:**
-- **Dynamic lessons from previous runs** (`src/services/run_history.py`) — replaces hardcoded "Lessons Learned" in the system prompt. Classifies incoming prompts to one of 18 known task types using multilingual keyword scoring (100% accuracy on test set), then injects a task-specific playbook (optimal API flow + pitfalls) into the user message. Playbooks are ~200-300 tokens each. Includes curated playbooks for all 18 task types + error patterns extracted from 43 parsed run logs.
-- **Pre-validation layer** (`src/services/api_validator.py`) — validates API calls against the OpenAPI spec BEFORE making HTTP requests. Catches unknown fields, [BETA] endpoints, wrong enum values, and auto-strips read-only fields. Prevents wasted API calls and 4xx error penalties.
-- **Richer endpoint details** (`src/services/openapi_spec.py`) — `get_endpoint_detail` now shows enum values inline (e.g., `userType: string (STANDARD | EXTENDED | NO_ACCESS)`) and expands `$ref` schemas one level to show writable fields.
-- **Score tracking in run logs** — each run log now includes a `[SCORE]` line showing previous→new score and whether it improved, e.g., `task_11: 0.00 → 2.80 ✓ IMPROVED (+2.80)`.
-- **Slimmed system prompt** — replaced ~800 tokens of task-specific hardcoded lessons with ~200 tokens of general rules. Task-specific knowledge now comes from dynamic playbook injection.
-- **Local test script** (`test_local.py`) — run `python test_local.py` to smoke-test changes before deploying.
-
-**Expected impact:**
-- All tasks: dynamic playbooks guide the agent with optimal API flows, reducing trial-and-error
-- task_11 (supplier invoices): 0.0 → should score >0 with correct voucherType approach
-- General: pre-validator prevents wasted API calls; playbooks reduce unnecessary endpoint discovery calls
-- New task types: agent falls back to discovery mode (no regression vs current)
-
-**Local test result:** task_1 6/6, task_2 8/8, task_4 5/5 — all perfect, 0 errors, playbooks injected.
+- Dynamic lessons from previous runs (run_history.py) — 18 task types with keyword classifier + curated playbooks
+- Pre-validation layer (api_validator.py) — catches unknown fields, BETA endpoints, wrong enum values
+- Richer endpoint details with inline enums and expanded $ref schemas
+- Score tracking in run logs with [SCORE] tag
+- Local test script (test_local.py)
 
 ---
 

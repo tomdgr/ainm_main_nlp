@@ -21,14 +21,37 @@ from src.simulator.tasks.task_supplier import SupplierTask
 from src.simulator.tasks.task_invoice import InvoiceTask
 from src.simulator.tasks.task_payment import PaymentTask
 from src.simulator.tasks.task_project import ProjectTask
+from src.simulator.tasks.task_voucher import VoucherExpenseTask
+from src.simulator.tasks.task_employee_contract import EmployeeContractTask
+from src.simulator.tasks.task_ledger_correction import LedgerCorrectionTask
+from src.simulator.tasks.task_overdue_invoice import OverdueInvoiceTask
+from src.simulator.tasks.task_currency_exchange import CurrencyExchangeTask
+from src.simulator.tasks.task_reverse_payment import ReversePaymentTask
+from src.simulator.tasks.task_credit_note import CreditNoteTask
+from src.simulator.tasks.task_fixed_price_project import FixedPriceProjectTask
+from src.simulator.tasks.task_timesheet_invoice import TimesheetInvoiceTask
+from src.simulator.tasks.task_dimension_voucher import DimensionVoucherTask
 
 ALL_TASKS = {
+    # Tier 1
     "task_1": DepartmentsTask("task_1"),
     "task_2": CustomerTask("task_2"),
     "task_4": SupplierTask("task_4"),
+    # Tier 2
     "task_6": InvoiceTask("task_6"),
     "task_7": PaymentTask("task_7"),
     "task_8": ProjectTask("task_8"),
+    "task_9": VoucherExpenseTask("task_9"),             # Expense voucher posting
+    "task_10": EmployeeContractTask("task_10"),         # Employee with full employment details
+    "task_14": CreditNoteTask("task_14"),               # Credit note on existing invoice
+    "task_15": FixedPriceProjectTask("task_15"),        # Fixed price project + partial invoice
+    "task_16": TimesheetInvoiceTask("task_16"),         # Log hours + project invoice
+    "task_17": DimensionVoucherTask("task_17"),         # Accounting dimension + voucher
+    "task_18": ReversePaymentTask("task_18"),           # Reverse bank payment (returned)
+    # Tier 3
+    "task_24": LedgerCorrectionTask("task_24"),         # Find & correct 4 ledger errors
+    "task_25": OverdueInvoiceTask("task_25"),           # Overdue invoice + reminder + partial payment
+    "task_26": CurrencyExchangeTask("task_26"),         # Currency exchange agio/disagio
 }
 
 

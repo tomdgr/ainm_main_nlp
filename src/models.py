@@ -21,3 +21,18 @@ class SolveRequest(BaseModel):
 
 class SolveResponse(BaseModel):
     status: str = "completed"
+
+
+class PlannedCall(BaseModel):
+    step: int
+    method: str
+    path: str
+    purpose: str
+    body_sketch: str = ""
+
+
+class TaskPlan(BaseModel):
+    task_summary: str
+    planned_calls: list[PlannedCall]
+    total_estimated_calls: int
+    notes: str = ""

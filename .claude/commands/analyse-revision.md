@@ -34,6 +34,10 @@ For tasks with the worst scores relative to their tier max, read the `*_run.txt`
 - **Tool call limit reached**: Agent spinning on wrong field names or endpoints?
 - **Unnecessary API calls**: Extra GETs, searches, or verification calls that could be skipped?
 - **Wrong strategy**: Creating entities that should have been searched for, or vice versa?
+- **Planner skip**: Did `[PHASE] Skipping planner` appear? Was the playbook classification correct?
+- **Effort level**: Check `[PHASE] Executor effort=X` — was the effort appropriate for the task?
+- **Timing**: Was Phase 1 too slow (>60s)? Was the total >300s? Where did time go (model thinking vs API)?
+- **File attachments**: For PDF tasks, was `[FILE]` logged? Did the agent extract data correctly?
 
 ## Step 4: Cross-reference with API spec
 

@@ -53,15 +53,17 @@ class OpenAPISpecSearcher:
         summary = details.get("summary", "")
         return summary.upper().startswith("[BETA]")
 
+    _BETA_WHITELIST: set[str] = set()  # No longer used for filtering
+
     def _build_index(self):
-        """Build a flat search index of all non-beta endpoints."""
+        """Build a flat search index of all endpoints (including BETA — they may work)."""
         beta_count = 0
         for path, methods in self._paths.items():
             for method, details in methods.items():
                 if method in ("get", "post", "put", "delete", "patch"):
                     if self._is_beta(details):
                         beta_count += 1
-                        continue
+                        # Still index BETA endpoints — some work on the competition proxy
                     self._index.append({
                         "path": path,
                         "method": method.upper(),
@@ -73,22 +75,62 @@ class OpenAPISpecSearcher:
         if beta_count:
             logger.info(f"Skipped {beta_count} [BETA] endpoints (always return 403)")
 
-    def search_endpoints(self, query: str, max_results: int = 8) -> str:
-        """Search endpoints by keyword. Returns formatted text of matches."""
+    # Synonyms: expand query keywords to find more API matches
+    _SYNONYMS: dict[str, set[str]] = {
+        "create": {"post", "add", "register", "new", "opprett"},
+        "register": {"create", "add", "book", "post"},
+        "update": {"put", "modify", "change", "edit"},
+        "delete": {"remove", "slett"},
+        "reverse": {"annul", "void", "undo", "reverser"},
+        "payment": {"betaling", "zahlung", "pago", "paiement"},
+        "balance": {"saldo", "balanse", "saldobalanse"},
+        "invoice": {"faktura", "rechnung", "factura", "fatura"},
+        "employee": {"ansatt", "tilsett", "arbeitnehmer"},
+        "customer": {"kunde", "client", "cliente"},
+        "supplier": {"leverandør", "lieferant", "fournisseur", "proveedor"},
+        "department": {"avdeling", "abteilung", "département"},
+        "project": {"prosjekt", "projekt", "proyecto", "projet"},
+        "voucher": {"bilag", "beleg", "écriture", "asiento"},
+    }
+
+    # Method keywords that indicate HTTP method preference
+    _METHOD_KEYWORDS: dict[str, str] = {
+        "create": "POST", "add": "POST", "register": "POST", "new": "POST",
+        "post": "POST", "opprett": "POST",
+        "update": "PUT", "modify": "PUT", "edit": "PUT", "put": "PUT",
+        "delete": "DELETE", "remove": "DELETE",
+        "get": "GET", "find": "GET", "search": "GET", "list": "GET", "fetch": "GET",
+    }
+
+    def search_endpoints(self, query: str, max_results: int = 12) -> str:
+        """Search endpoints by keyword with weighted scoring. Returns formatted text of matches."""
         if not self._index:
             return "OpenAPI spec not loaded."
 
         query_lower = query.lower()
-        keywords = query_lower.split()
+        raw_keywords = query_lower.split()
+
+        # Detect method preference from query keywords
+        preferred_method = None
+        for kw in raw_keywords:
+            if kw in self._METHOD_KEYWORDS:
+                preferred_method = self._METHOD_KEYWORDS[kw]
+                break
+
+        # Expand keywords with synonyms
+        expanded = set(raw_keywords)
+        for kw in raw_keywords:
+            if kw in self._SYNONYMS:
+                expanded.update(self._SYNONYMS[kw])
 
         scored = []
         for entry in self._index:
-            searchable = f"{entry['path']} {entry['summary']} {' '.join(entry['tags'])} {entry['operation_id']}".lower()
-            score = sum(1 for kw in keywords if kw in searchable)
+            score = self._score_entry(entry, expanded, preferred_method)
             if score > 0:
                 scored.append((score, entry))
 
-        scored.sort(key=lambda x: -x[0])
+        # Sort by score desc, then by path length asc (shorter = more relevant)
+        scored.sort(key=lambda x: (-x[0], len(x[1]['path'])))
         results = scored[:max_results]
 
         if not results:
@@ -113,7 +155,10 @@ class OpenAPISpecSearcher:
             req_body = entry["details"].get("requestBody", {})
             if req_body:
                 content = req_body.get("content", {})
-                json_schema = content.get("application/json", {}).get("schema", {})
+                json_schema = (
+                    content.get("application/json; charset=utf-8", {}).get("schema", {})
+                    or content.get("application/json", {}).get("schema", {})
+                )
                 ref = json_schema.get("$ref", "")
                 if ref:
                     schema_name = ref.split("/")[-1]
@@ -122,6 +167,41 @@ class OpenAPISpecSearcher:
             lines.append("")
 
         return "\n".join(lines)
+
+    def _score_entry(self, entry: dict, keywords: set[str], preferred_method: str | None) -> float:
+        """Score an endpoint against expanded keywords with field weighting."""
+        path = entry["path"].lower()
+        summary = entry["summary"].lower()
+        op_id = entry["operation_id"].lower()
+        tags = " ".join(entry["tags"]).lower()
+        method = entry["method"]
+
+        # Split path into segments for exact matching
+        raw_segments = path.strip("/").split("/")
+        path_segments = set(raw_segments)
+        # Also include action segments like :invoice, :payment, :reverse
+        path_segments.update(seg.lstrip(":") for seg in raw_segments if seg.startswith(":"))
+
+        score = 0.0
+        for kw in keywords:
+            # Exact path segment match (strongest signal)
+            if kw in path_segments:
+                score += 5.0
+            # Substring in path
+            elif kw in path:
+                score += 3.0
+            # In summary
+            if kw in summary:
+                score += 2.0
+            # In operation_id or tags
+            if kw in op_id or kw in tags:
+                score += 1.0
+
+        # Method preference bonus
+        if preferred_method and method == preferred_method:
+            score += 3.0
+
+        return score
 
     def get_endpoint_details(self, path: str, method: str) -> str:
         """Get full details for a specific endpoint including body schema fields."""
@@ -132,8 +212,7 @@ class OpenAPISpecSearcher:
         if not details:
             return f"Endpoint {method.upper()} {path} not found."
 
-        if self._is_beta(details):
-            return f"Endpoint {method.upper()} {path} is a [BETA] endpoint and will return 403 Forbidden. Use a non-beta alternative."
+        # Note: BETA endpoints are no longer blocked — some work on the competition proxy
 
         lines = [f"{method.upper()} {path}", f"Summary: {details.get('summary', 'N/A')}", ""]
 
@@ -147,21 +226,28 @@ class OpenAPISpecSearcher:
                 lines.append(f"  - {p['name']} ({p_type}, {req}): {p.get('description', '')}")
             lines.append("")
 
-        # Request body
+        # Request body — try both content type variants
         req_body = details.get("requestBody", {})
         if req_body:
             content = req_body.get("content", {})
-            json_schema = content.get("application/json", {}).get("schema", {})
-            lines.append("Request body:")
-            self._format_schema(json_schema, lines, indent=2)
-            lines.append("")
+            json_schema = (
+                content.get("application/json; charset=utf-8", {}).get("schema", {})
+                or content.get("application/json", {}).get("schema", {})
+            )
+            if json_schema:
+                lines.append("Request body:")
+                self._format_schema(json_schema, lines, indent=2)
+                lines.append("")
 
-        # Response
+        # Response — try both content type variants
         responses = details.get("responses", {})
         for code, resp in responses.items():
             if code.startswith("2"):
                 resp_content = resp.get("content", {})
-                resp_schema = resp_content.get("application/json", {}).get("schema", {})
+                resp_schema = (
+                    resp_content.get("application/json; charset=utf-8", {}).get("schema", {})
+                    or resp_content.get("application/json", {}).get("schema", {})
+                )
                 if resp_schema:
                     lines.append(f"Response ({code}):")
                     self._format_schema(resp_schema, lines, indent=2)
@@ -220,6 +306,25 @@ class OpenAPISpecSearcher:
                     prop_type = f"object {{{'|'.join(ref_fields)}}}"
                 else:
                     prop_type = f"ref:{ref_name}"
+
+            # Handle arrays with $ref items — show writable fields of the item schema
+            if prop_type == "array":
+                items = prop_def.get("items", {})
+                items_ref = items.get("$ref")
+                if items_ref:
+                    items_name = items_ref.split("/")[-1]
+                    items_schema = self._schemas.get(items_name, {})
+                    items_props = items_schema.get("properties", {})
+                    # Show ALL writable fields — critical for nested schemas like Posting
+                    # where important fields (freeAccountingDimension1) are far down
+                    writable = [
+                        k for k, v in items_props.items()
+                        if not v.get("readOnly", False)
+                    ]
+                    if writable:
+                        prop_type = f"array of {items_name} {{{'|'.join(writable)}}}"
+                    else:
+                        prop_type = f"array of {items_name}"
 
             # Show enum values inline
             enum_values = prop_def.get("enum")

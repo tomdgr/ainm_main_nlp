@@ -1,5 +1,6 @@
 """Logging utilities for the Tripletex AI agent."""
 
+import base64
 import io
 import json
 import logging
@@ -93,6 +94,7 @@ class RunLogger:
         self.timestamp: str | None = None  # Set at finalize() with end-time
         self._run_buf = io.StringIO()
         self._console_buf = io.StringIO()
+        self._files: list[tuple[str, bytes]] = []  # (filename, raw_bytes)
 
         # Attach a logging handler that captures console output for this run
         self._log_handler = logging.StreamHandler(self._console_buf)
@@ -153,6 +155,20 @@ class RunLogger:
         warning_text = "; ".join(warnings)
         self.log("VALIDATION", f"{method} {path} blocked: {warning_text}")
 
+    def store_files(self, files: list) -> None:
+        """Store file attachments (FileAttachment objects) to be saved alongside run logs.
+
+        Each file is saved with the same prefix as the run/console logs,
+        e.g. no_5_20260321_051951_570_invoice.pdf
+        """
+        for f in files:
+            try:
+                raw_bytes = base64.b64decode(f.content_base64)
+                self._files.append((f.filename, raw_bytes))
+                self.log("FILE", f"Stored attachment: {f.filename} ({len(raw_bytes)} bytes, {f.mime_type})")
+            except Exception as e:
+                self.log("FILE_ERROR", f"Failed to decode {f.filename}: {e}")
+
     # -- Finalize & Save --
 
     def finalize(self):
@@ -197,7 +213,18 @@ class RunLogger:
         with open(console_path, "w") as f:
             f.write(self._console_buf.getvalue())
 
-        logging.getLogger(__name__).info(f"Run logs saved: {run_path}")
+        # Save file attachments (PDFs, images, etc.)
+        for filename, raw_bytes in self._files:
+            # Sanitize filename and prepend the run prefix
+            safe_name = filename.replace("/", "_").replace("\\", "_")
+            file_path = os.path.join(log_dir, f"{prefix}_{safe_name}")
+            with open(file_path, "wb") as f:
+                f.write(raw_bytes)
+
+        logging.getLogger(__name__).info(
+            f"Run logs saved: {run_path}"
+            + (f" (+{len(self._files)} files)" if self._files else "")
+        )
 
     async def _save_gcs(self):
         bucket_name = os.getenv("LOG_BUCKET", "")
@@ -220,7 +247,19 @@ class RunLogger:
             console_blob = bucket.blob(f"{subdir}/{file_prefix}_console.txt")
             console_blob.upload_from_string(self._console_buf.getvalue(), content_type="text/plain")
 
-            logging.getLogger(__name__).info(f"Run logs uploaded to gs://{bucket_name}/{subdir}/{file_prefix}_*.txt")
+            # Upload file attachments (PDFs, images, etc.)
+            for filename, raw_bytes in self._files:
+                safe_name = filename.replace("/", "_").replace("\\", "_")
+                file_blob = bucket.blob(f"{subdir}/{file_prefix}_{safe_name}")
+                # Guess content type from extension
+                ext = os.path.splitext(safe_name)[1].lower()
+                ct = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg"}.get(ext, "application/octet-stream")
+                file_blob.upload_from_string(raw_bytes, content_type=ct)
+
+            logging.getLogger(__name__).info(
+                f"Run logs uploaded to gs://{bucket_name}/{subdir}/{file_prefix}_*.txt"
+                + (f" (+{len(self._files)} files)" if self._files else "")
+            )
         except Exception as e:
             logging.getLogger(__name__).error(f"Failed to upload logs to GCS: {e}, falling back to local")
             self._save_local()
