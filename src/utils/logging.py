@@ -149,6 +149,10 @@ class RunLogger:
     def log_error(self, error: str):
         self.log("ERROR", error)
 
+    def log_validation_warning(self, method: str, path: str, warnings: list[str]):
+        warning_text = "; ".join(warnings)
+        self.log("VALIDATION", f"{method} {path} blocked: {warning_text}")
+
     # -- Finalize & Save --
 
     def finalize(self):

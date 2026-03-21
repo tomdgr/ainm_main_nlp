@@ -38,6 +38,7 @@ class LeaderboardService:
         self._initial_saved = False
         self._claimed: set[tuple[str, str]] = set()  # (task_id, last_attempt_at)
         self._lock = asyncio.Lock()
+        self._prev_scores: dict[str, float] = {}  # task_id -> last known best_score
 
     async def _fetch(self) -> list[dict] | None:
         """Fetch leaderboard data from the API."""
@@ -104,15 +105,16 @@ class LeaderboardService:
 
     def _match_task_unclaimed(
         self, tasks: list[dict], run_end_time: datetime, max_age_s: float
-    ) -> tuple[str | None, int, str | None]:
+    ) -> tuple[str | None, int, str | None, float]:
         """Find the closest unclaimed task match.
 
         Returns:
-            (task_id, attempt_number, last_attempt_at_str) or (None, 0, None)
+            (task_id, attempt_number, last_attempt_at_str, best_score) or (None, 0, None, 0.0)
         """
         best_task_id = None
         best_attempts = 0
         best_attempt_at = None
+        best_score = 0.0
         best_diff = timedelta(seconds=max_age_s)
 
         for task in tasks:
@@ -136,8 +138,9 @@ class LeaderboardService:
                 best_task_id = task_id
                 best_attempts = task.get("total_attempts", 0)
                 best_attempt_at = attempt_at_str
+                best_score = task.get("best_score", 0.0)
 
-        return best_task_id, best_attempts, best_attempt_at
+        return best_task_id, best_attempts, best_attempt_at, best_score
 
     async def detect_task(
         self,
@@ -145,14 +148,14 @@ class LeaderboardService:
         max_age_s: float = 60.0,
         retries: int = 5,
         retry_delay_s: float = 3.0,
-    ) -> tuple[str | None, int]:
+    ) -> tuple[str | None, int, float, float]:
         """Detect which task was just attempted, with retry and claim-based dedup.
 
         The lock serializes concurrent detections so that when multiple runs finish
         at the same time, each one claims a different leaderboard entry.
 
         Returns:
-            Tuple of (task_id like "task_07", attempt_number) or (None, 0) if no match.
+            Tuple of (task_id, attempt_number, prev_score, new_score) or (None, 0, 0.0, 0.0).
         """
         async with self._lock:
             for attempt in range(retries):
@@ -165,27 +168,35 @@ class LeaderboardService:
                 # Save initial scores on first fetch (once per revision lifetime)
                 if not self._initial_saved:
                     self._save_score_file("initial_scores.json", tasks)
+                    # Populate prev_scores from initial snapshot
+                    for t in tasks:
+                        tid = f"task_{t['tx_task_id']}"
+                        self._prev_scores[tid] = t.get("best_score", 0.0)
                     self._initial_saved = True
 
                 # Always update latest scores
                 self._save_score_file("latest_scores.json", tasks)
 
                 # Try to match (excluding already-claimed entries)
-                task_id, attempts, attempt_at = self._match_task_unclaimed(
+                task_id, attempts, attempt_at, new_score = self._match_task_unclaimed(
                     tasks, run_end_time, max_age_s
                 )
 
                 if task_id and attempt_at:
                     self._claimed.add((task_id, attempt_at))
+                    prev_score = self._prev_scores.get(task_id, 0.0)
+                    # Update prev_scores for subsequent runs on the same task
+                    self._prev_scores[task_id] = new_score
                     logger.info(
                         f"Detected task: {task_id} (attempt #{attempts}, "
-                        f"try {attempt + 1}/{retries}, claimed {attempt_at})"
+                        f"try {attempt + 1}/{retries}, claimed {attempt_at}, "
+                        f"score {prev_score:.2f} → {new_score:.2f})"
                     )
-                    return task_id, attempts
+                    return task_id, attempts, prev_score, new_score
 
                 if attempt < retries - 1:
                     logger.info(f"No unclaimed match (try {attempt + 1}/{retries}), retrying in {retry_delay_s}s...")
                     await asyncio.sleep(retry_delay_s)
 
             logger.warning(f"No task matched after {retries} retries — saving to unclassified/")
-            return None, 0
+            return None, 0, 0.0, 0.0

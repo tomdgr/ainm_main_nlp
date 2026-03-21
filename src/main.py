@@ -13,9 +13,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from src.models import SolveRequest, SolveResponse
 from src.services.agent_service import AgentService
+from src.services.api_validator import APIValidator
 # from src.services.api_search import ApiSearchService
 from src.services.leaderboard import LeaderboardService
 from src.services.openapi_spec import OpenAPISpecSearcher
+from src.services.run_history import RunHistoryService
 from src.utils.logging import setup_logging
 
 setup_logging()
@@ -40,12 +42,25 @@ spec_searcher.load()
 # api_search = ApiSearchService()
 # api_search.load()
 
+# Pre-validation engine (uses the raw OpenAPI spec)
+api_validator = APIValidator(spec_searcher.get_raw_spec())
+
+# Dynamic lessons from previous runs
+run_history = RunHistoryService()
+run_history.load(log_dirs=["example_runs/tripletex-agent"])
+
 # Leaderboard service for auto-detecting task IDs
 leaderboard = LeaderboardService()
 logger.info(f"Leaderboard tracking enabled for team {LeaderboardService.TEAM_ID}")
 
 # Create agent service
-agent_service = AgentService(spec_searcher=spec_searcher, api_search=None, leaderboard=leaderboard)
+agent_service = AgentService(
+    spec_searcher=spec_searcher,
+    api_validator=api_validator,
+    run_history=run_history,
+    api_search=None,
+    leaderboard=leaderboard,
+)
 
 app = FastAPI(title="Tripletex AI Agent", version="0.1.0")
 

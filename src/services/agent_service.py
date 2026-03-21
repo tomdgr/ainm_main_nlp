@@ -16,8 +16,10 @@ from src.models import FileAttachment, SolveRequest
 from src.prompts.system_prompt import get_system_prompt
 
 # from src.services.api_search import ApiSearchService
+from src.services.api_validator import APIValidator
 from src.services.leaderboard import LeaderboardService
 from src.services.openapi_spec import OpenAPISpecSearcher
+from src.services.run_history import RunHistoryService
 from src.services.tripletex_client import TripletexClient
 from src.utils.logging import RunLogger
 
@@ -30,6 +32,7 @@ class AgentDeps:
 
     tripletex_client: TripletexClient
     spec_searcher: OpenAPISpecSearcher
+    api_validator: APIValidator
     # api_search: ApiSearchService
     run_logger: RunLogger
     files: list[FileAttachment] = field(default_factory=list)
@@ -41,10 +44,14 @@ class AgentService:
     def __init__(
         self,
         spec_searcher: OpenAPISpecSearcher,
+        api_validator: APIValidator,
+        run_history: RunHistoryService | None = None,
         api_search=None,  # ApiSearchService, disabled for now
         leaderboard: LeaderboardService | None = None,
     ):
         self.spec_searcher = spec_searcher
+        self.api_validator = api_validator
+        self.run_history = run_history
         self.api_search = api_search
         self.leaderboard = leaderboard
         self.model = self._create_model()
@@ -115,11 +122,31 @@ class AgentService:
                 },
             )
 
+            # --- Pre-validation: catch errors before making the HTTP call ---
+            warnings = ctx.deps.api_validator.validate(method, path, json_body)
+            if warnings:
+                warning_text = "\n".join(f"  - {w}" for w in warnings)
+                ctx.deps.run_logger.log_validation_warning(method, path, warnings)
+                result = {
+                    "status_code": 0,
+                    "body": {
+                        "validation_warnings": warnings,
+                        "message": f"Pre-validation caught issues (no API call made):\n{warning_text}",
+                    },
+                    "ok": False,
+                }
+                result_str = json.dumps(result, ensure_ascii=False, default=str)
+                ctx.deps.run_logger.log_tool_result("tripletex_api", result_str)
+                return result_str
+
+            # Strip read-only fields silently before sending
+            cleaned_body = ctx.deps.api_validator.strip_readonly_fields(method, path, json_body)
+
             result = await ctx.deps.tripletex_client.request(
                 method=method,
                 path=path,
                 params=params,
-                json_body=json_body,
+                json_body=cleaned_body,
             )
             result_str = json.dumps(result, ensure_ascii=False, default=str)
             ctx.deps.run_logger.log_tool_result("tripletex_api", result_str)
@@ -242,12 +269,23 @@ class AgentService:
             deps = AgentDeps(
                 tripletex_client=client,
                 spec_searcher=self.spec_searcher,
+                api_validator=self.api_validator,
                 # api_search=self.api_search,
                 run_logger=run_logger,
                 files=request.files,
             )
 
             user_message = self._build_user_message(request)
+
+            # Inject lessons from previous runs
+            if self.run_history:
+                lessons = self.run_history.get_lessons(request.prompt)
+                if lessons:
+                    if isinstance(user_message, str):
+                        user_message = lessons + "\n\n" + user_message
+                    elif isinstance(user_message, list):
+                        user_message = [lessons + "\n\n" + str(user_message[0])] + user_message[1:]
+                    run_logger.log("LESSONS", "Injected playbook for classified task")
 
             result = await self.agent.run(
                 user_message,
@@ -325,12 +363,23 @@ class AgentService:
     async def _detect_and_save(self, run_logger, run_end_time: datetime):
         """Background task: retry leaderboard detection then save logs."""
         try:
-            detected_task, attempts = await self.leaderboard.detect_task(run_end_time)
+            detected_task, attempts, prev_score, new_score = await self.leaderboard.detect_task(run_end_time)
             if detected_task:
                 run_logger.task_id = detected_task
                 run_logger.attempt_number = attempts
+
+                # Log score change in the run log
+                if new_score > prev_score:
+                    run_logger.log("SCORE", f"{detected_task}: {prev_score:.2f} → {new_score:.2f} ✓ IMPROVED (+{new_score - prev_score:.2f})")
+                elif new_score == prev_score:
+                    run_logger.log("SCORE", f"{detected_task}: {new_score:.2f} (no change)")
+                else:
+                    # best_score never decreases, so this means benchmark recalculation
+                    run_logger.log("SCORE", f"{detected_task}: {prev_score:.2f} → {new_score:.2f} (benchmark recalculated)")
+
                 logger.info(
-                    f"Background detection: {detected_task} (attempt #{attempts})"
+                    f"Background detection: {detected_task} (attempt #{attempts}, "
+                    f"score {prev_score:.2f} → {new_score:.2f})"
                 )
             else:
                 logger.warning(

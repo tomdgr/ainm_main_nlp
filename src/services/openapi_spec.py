@@ -43,6 +43,10 @@ class OpenAPISpecSearcher:
         self._build_index()
         logger.info(f"Indexed {len(self._index)} endpoints from OpenAPI spec")
 
+    def get_raw_spec(self) -> dict:
+        """Return the raw OpenAPI spec dict for use by validators."""
+        return self._spec
+
     @staticmethod
     def _is_beta(details: dict) -> bool:
         """Check if an endpoint is marked as [BETA] in its summary."""
@@ -188,7 +192,7 @@ class OpenAPISpecSearcher:
             self._format_schema_object(schema, lines, indent)
 
     def _format_schema_object(self, schema: dict, lines: list, indent: int = 0):
-        """Format schema properties."""
+        """Format schema properties with enum values and expanded refs."""
         prefix = " " * indent
         required_fields = set(schema.get("required", []))
         properties = schema.get("properties", {})
@@ -201,11 +205,27 @@ class OpenAPISpecSearcher:
             if read_only:
                 continue  # Skip read-only fields for brevity
 
-            # Handle refs in properties
+            # Handle refs in properties — expand one level to show key fields
             ref = prop_def.get("$ref")
             if ref:
                 ref_name = ref.split("/")[-1]
-                prop_type = f"ref:{ref_name}"
+                ref_schema = self._schemas.get(ref_name, {})
+                ref_props = ref_schema.get("properties", {})
+                # Show writable scalar fields of the referenced schema
+                ref_fields = [
+                    k for k, v in ref_props.items()
+                    if not v.get("readOnly", False) and v.get("type") in ("string", "integer", "number", "boolean", None)
+                ][:5]
+                if ref_fields:
+                    prop_type = f"object {{{'|'.join(ref_fields)}}}"
+                else:
+                    prop_type = f"ref:{ref_name}"
+
+            # Show enum values inline
+            enum_values = prop_def.get("enum")
+            if enum_values:
+                enum_str = " | ".join(str(v) for v in enum_values)
+                prop_type = f"{prop_type} ({enum_str})"
 
             desc = prop_def.get("description", "")
             desc_short = desc[:80] + "..." if len(desc) > 80 else desc

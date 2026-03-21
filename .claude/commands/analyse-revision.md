@@ -62,6 +62,23 @@ After implementing, present:
 2. Expected score improvements per task.
 3. Suggest which tasks to re-run first (highest potential gain).
 
+## Step 7: Verify locally before deploying
+
+After implementing fixes, run `/test-local` to smoke-test with the local simulator:
+
+```bash
+python test_local.py task_1 task_2 task_4    # quick tier 1 check
+python test_local.py                          # full run
+```
+
+This verifies:
+- Agent starts up and responds correctly
+- No regressions on existing tasks
+- Pre-validator catches are logged (look for `[VALIDATION]` in output)
+- No new API errors introduced
+
+Only recommend deploying if the local test passes clean.
+
 ## Important notes
 
 - The leaderboard tracks BEST score per task across ALL attempts — a bad run never lowers the score.
@@ -70,3 +87,4 @@ After implementing, present:
 - Each 4xx error reduces efficiency bonus by 15%.
 - Focus on correctness first (much bigger impact than efficiency).
 - 5 attempts per task per day limit — prioritise high-value improvements.
+- The local simulator covers 6 of 30 tasks — it's a smoke test, not ground truth.

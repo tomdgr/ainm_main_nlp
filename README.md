@@ -6,9 +6,12 @@ AI agent for the NM i AI 2026 Tripletex challenge. Receives natural-language acc
 
 ```
 POST /solve → FastAPI (Bearer auth) → PydanticAI Agent (Claude Opus 4.6 via Vertex AI)
-                                            ├── tripletex_api tool   → Tripletex REST API (via proxy)
-                                            ├── search_api tool      → Hybrid BM25 + semantic search over OpenAPI spec
+                                            ├── tripletex_api tool   → Pre-validation → Tripletex REST API
+                                            ├── search_api_spec      → Keyword search over OpenAPI spec
                                             └── get_endpoint_detail  → Full endpoint schema lookup
+
+Prompt → RunHistoryService (classify task → inject playbook) → Agent
+         APIValidator (check fields/enums/BETA before HTTP call)
 ```
 
 ## Project Structure
@@ -18,24 +21,27 @@ src/
   main.py                      # FastAPI app (/solve, /health) + auth
   models.py                    # Pydantic request/response models
   services/
-    agent_service.py           # PydanticAI agent with tools
+    agent_service.py           # PydanticAI agent with tools + lesson injection
     tripletex_client.py        # Async HTTP client for Tripletex API
-    api_search.py              # Hybrid BM25 + semantic endpoint search
-    openapi_spec.py            # Legacy keyword search (fallback)
+    api_validator.py           # Pre-validates API calls against OpenAPI spec
+    run_history.py             # Dynamic lessons from previous runs (classifier + playbooks)
+    openapi_spec.py            # Keyword search over OpenAPI spec
+    leaderboard.py             # Competition leaderboard polling + task detection
   prompts/
-    system_prompt.py           # System prompt with strategy and lessons learned
+    system_prompt.py           # System prompt with strategy and general rules
   utils/
     logging.py                 # Structured logging + per-run file logs (local/GCS)
   simulator/
     game_simulator.py          # Local testing simulator
     models.py                  # Check, TaskResult, SimulatorReport
     tasks/                     # Task definitions with prompts and verification checks
+example_runs/                  # Run logs from competition (used for dynamic lessons)
+test_local.py                  # Local smoke test script
 Dockerfile                     # Python 3.13 + uv, runs on port 8080
 deploy.sh                      # One-command Cloud Run deployment
+CHANGELOG.md                   # Score progression per revision
 notebooks/
   simulator.ipynb              # Run simulator against local agent
-  test_tasks.ipynb             # Manual single-task testing
-  test_agent.ipynb             # Ad-hoc sandbox exploration
 ```
 
 ## Quick Start
@@ -84,25 +90,16 @@ The simulator runs task prompts against your local HTTPS agent and verifies resu
 # 1. Start the agent (HTTPS)
 ./run_local.sh
 
-# 2. Open notebooks/simulator.ipynb and run cells
+# 2. Run the test script (in another terminal)
+python test_local.py                        # all tasks
+python test_local.py task_1 task_2 task_4    # quick tier 1 check
+python test_local.py task_6 task_7 task_8    # tier 2 tasks
+
+# Or use the notebook
+# notebooks/simulator.ipynb
 ```
 
-Or from Python:
-
-```python
-from src.simulator.game_simulator import GameSimulator
-
-sim = GameSimulator(agent_url="http://localhost:8000")
-
-# Run all tasks
-report = await sim.run_all()
-
-# Run a single task
-result = await sim.run_task("task_4")
-
-# Run a subset
-report = await sim.run_all(task_ids=["task_4", "task_6", "task_8"])
-```
+The test script runs the simulator and then analyses the new run logs, showing validation catches and API errors.
 
 **Available tasks:**
 
@@ -136,37 +133,45 @@ TOTAL                                       17.67    18.0
 
 ### Iteration Workflow
 
-1. Make changes to `src/prompts/system_prompt.py` or `src/services/agent_service.py`
-2. Restart the server (`uvicorn` auto-reloads on file changes)
-3. Run the simulator to check scores
-4. If scores improve → deploy: `./deploy.sh`
-5. Submit on [app.ainm.no](https://app.ainm.no/submit/tripletex) to get official scores
+1. Make changes (prompts, tools, playbooks, etc.)
+2. Server auto-reloads on file changes (if started with `./run_local.sh`)
+3. Run `python test_local.py task_1 task_2 task_4` to smoke-test
+4. Check run logs for `[VALIDATION]` catches and `[LESSONS]` injection
+5. If tests pass → deploy: `./deploy.sh`
+6. Submit on [app.ainm.no](https://app.ainm.no/submit/tripletex) to get official scores
+7. Download logs: `./download_logs.sh` — check `[SCORE]` lines to see which runs improved
 
 ### Run Logs
 
-Each agent run is logged to timestamped files:
-- **Local**: `src/logs/runs/local/{task_id}/YYYYMMDD_HHMMSS_run.txt`
-- **Cloud Run**: `gs://{LOG_BUCKET}/runs/{service}/{revision}/YYYYMMDD_HHMMSS_run.txt`
+Each agent run is logged to timestamped files with structured tags:
+
+- **Local**: `src/logs/runs/local/{task_id}/no_{attempt}_YYYYMMDD_HHMMSS_run.txt`
+- **Cloud Run**: `gs://{LOG_BUCKET}/runs/{service}/{revision}/{task_id}/no_{attempt}_YYYYMMDD_HHMMSS_run.txt`
+
+Key log tags:
+| Tag | Description |
+|-----|-------------|
+| `[PROMPT]` | The task prompt received |
+| `[LESSONS]` | Dynamic playbook was injected |
+| `[VALIDATION]` | Pre-validator blocked a bad API call (saved a real call) |
+| `[API]` | HTTP request with status code and response |
+| `[SCORE]` | Score change after run: `task_11: 0.00 → 2.80 ✓ IMPROVED` |
+| `[DONE]` | Summary: duration, api_calls, api_errors |
 
 Download cloud logs:
 ```bash
 ./download_logs.sh
 ```
 
-View Cloud Run console logs:
+Find score improvements:
 ```bash
-# Latest 50 log entries
-gcloud run services logs read tripletex-agent --region europe-north1 --project ainm26osl-708 --limit 50
-
-# Live tail
-gcloud beta run services logs tail tripletex-agent --region europe-north1 --project ainm26osl-708
+grep "IMPROVED" example_runs/**/**/*_run.txt
 ```
 
-### Manual Testing
-
-For ad-hoc testing without the simulator:
-- `notebooks/test_tasks.ipynb` — sends specific prompts per task type
-- `notebooks/test_agent.ipynb` — general sandbox exploration
+View Cloud Run console logs:
+```bash
+gcloud beta run services logs tail tripletex-agent --region europe-north1 --project ainm26osl-708
+```
 
 ## Deployment
 

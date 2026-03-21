@@ -48,31 +48,32 @@ Use search_api_spec and get_endpoint_detail to discover exact paths, params, and
 - /project — projects
 - /order — orders with order lines
 - /invoice, /invoice/paymentType — invoices, payments, credit notes
-- /travelExpense, /travelExpense/cost, /travelExpense/mileageAllowance — travel expenses
+- /travelExpense, /travelExpense/cost, /travelExpense/perDiemCompensation, /travelExpense/mileageAllowance — travel expenses
+- /supplierInvoice — search/approve/reject/pay existing supplier invoices (read-only; to CREATE supplier invoices, use POST /ledger/voucher with the correct voucherType)
 - /ledger/vatType — VAT types
 - /ledger/account — chart of accounts
 - /ledger/voucher — vouchers
 - /ledger/posting — ledger postings
 - /token/session/>whoAmI — get current company/employee info
 
-## Lessons Learned (from past errors)
+## Pre-validation
 
-These are pitfalls discovered through experience that are NOT obvious from the API spec:
+The tripletex_api tool has a built-in pre-validator that checks your calls against the OpenAPI spec BEFORE making the HTTP request. It catches unknown fields, [BETA] endpoints, wrong enum values, and auto-strips read-only fields. If you get a validation warning (status_code 0), fix the issue and retry — no API call was wasted.
 
-- **Employee creation** requires userType (e.g., "STANDARD") and department: {{id}} — both fail with 422 if omitted. GET /department first to find a department ID.
-- **Employee employment**: Use taxDeductionCode (e.g., "loennFraHovedarbeidsgiver"), NOT "employmentType" which doesn't exist.
-- **Orders** require deliveryDate — fails with 422 if omitted. Use today's date as default.
-- **Projects** require startDate — fails with 422 if omitted. Use today's date as default.
-- **Invoice payment types**: Use GET /invoice/paymentType, NOT /ledger/paymentType (which 404s).
-- **Invoice payment amount**: paidAmount must be the TOTAL amount INCLUDING VAT.
-- **VAT for sales**: "excluding VAT" / "eksklusiv MVA" / "sem IVA" means the price is stated without VAT, but standard 25% VAT still applies. Use vatType id=3 ("Utgående avgift, høy sats"). Do NOT use id=6 (0%).
-- **Invoice creation** may fail with "selskapet har ikke registrert et bankkontonummer". Fix: find ledger account 1920 via GET /ledger/account?number=1920, then PUT a valid bank account number (e.g., "12345678903").
-- **Invoices require orders**: Create an order with orderLines first, then reference it in the invoice.
-- **Email fields**: When an email is provided, set BOTH email and invoiceEmail on customers/suppliers.
-- **Existing entities**: The sandbox may have pre-populated data. Search before creating to avoid duplicates.
-- **Employee roles**: "administrator" / "kontoadministrator" → after creating employee, use PUT /employee/entitlement/:grantEntitlementsByTemplate with template="allTripletexAdministrator".
-- **Employee entitlements**: To grant access (e.g., project manager), use PUT /employee/entitlement/:grantEntitlementsByTemplate with employeeId and template as QUERY PARAMS — do NOT post individual entitlements one by one via POST /employee/entitlement. That endpoint is for single entitlements and will loop forever. The template endpoint sets all needed entitlements in one call.
-- **Project manager access**: If POST /project fails with "har ikke fått tilgang som prosjektleder", grant entitlements first: PUT /employee/entitlement/:grantEntitlementsByTemplate?employeeId=X&template=allTripletexAdministrator, then retry the project creation.
+## Dynamic Lessons
+
+When available, task-specific lessons from previous successful runs are prepended to the task prompt. These contain the recommended API flow and known pitfalls for the task type. Follow the recommended flow but adapt field values to the specific prompt.
+
+## General Rules
+
+- POST/PUT responses return {{"value": {{...}}}} — use the returned id directly, don't make extra GET calls.
+- PUT requires id and version in body.
+- Dates: YYYY-MM-DD. Use today's date as default when needed but not specified.
+- Search before creating to avoid duplicates — the sandbox may have pre-populated data.
+- If a call fails with 422, read the error message carefully and fix in ONE retry.
+- For invoices: always set up bank account 1920 first, always include invoiceDueDate.
+- "Excluding VAT" means the stated price is without VAT, but standard 25% VAT still applies (vatType id=3).
+- GET /invoice requires invoiceDateFrom and invoiceDateTo — use a wide range like "2020-01-01" to "2030-12-31".
 
 ## Multilingual Terms
 
