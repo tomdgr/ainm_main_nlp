@@ -31,27 +31,52 @@ from src.simulator.tasks.task_credit_note import CreditNoteTask
 from src.simulator.tasks.task_fixed_price_project import FixedPriceProjectTask
 from src.simulator.tasks.task_timesheet_invoice import TimesheetInvoiceTask
 from src.simulator.tasks.task_dimension_voucher import DimensionVoucherTask
+from src.simulator.tasks.task_receipt_expense import ReceiptExpenseTask
+from src.simulator.tasks.task_product import ProductTask
+from src.simulator.tasks.task_bank_reconciliation import BankReconciliationTask
+from src.simulator.tasks.task_expense_analysis import ExpenseAnalysisTask
+from src.simulator.tasks.task_supplier_invoice import SupplierInvoiceTask
+from src.simulator.tasks.task_travel_expense import TravelExpenseTask
+from src.simulator.tasks.task_payroll import PayrollTask
+from src.simulator.tasks.task_project_lifecycle import ProjectLifecycleTask
+from src.simulator.tasks.task_year_end import YearEndTask
+from src.simulator.tasks.task_employee_pdf import EmployeePDFTask
+from src.simulator.tasks.task_supplier_invoice_pdf import SupplierInvoicePDFTask
 
 ALL_TASKS = {
     # Tier 1
     "task_1": DepartmentsTask("task_1"),
+    "task_5": DepartmentsTask("task_5"),
     "task_2": CustomerTask("task_2"),
+    "task_3": ProductTask("task_3"),                      # Create product with number, price, VAT
     "task_4": SupplierTask("task_4"),
-    # Tier 2
     "task_6": InvoiceTask("task_6"),
     "task_7": PaymentTask("task_7"),
     "task_8": ProjectTask("task_8"),
+    # Tier 2
     "task_9": VoucherExpenseTask("task_9"),             # Expense voucher posting
     "task_10": EmployeeContractTask("task_10"),         # Employee with full employment details
     "task_14": CreditNoteTask("task_14"),               # Credit note on existing invoice
     "task_15": FixedPriceProjectTask("task_15"),        # Fixed price project + partial invoice
     "task_16": TimesheetInvoiceTask("task_16"),         # Log hours + project invoice
     "task_17": DimensionVoucherTask("task_17"),         # Accounting dimension + voucher
+    "task_11": SupplierInvoiceTask("task_11"),           # Supplier invoice (no PDF, text details)
+    "task_13": TravelExpenseTask("task_13"),             # Travel expense with per diem + costs
+    "task_12": PayrollTask("task_12"),                   # Payroll: base salary + bonus
     "task_18": ReversePaymentTask("task_18"),           # Reverse bank payment (returned)
     # Tier 3
+    "task_22": ReceiptExpenseTask("task_22"),             # Expense from PDF receipt
+    "task_27": ReceiptExpenseTask("task_27"),             # Same as task_22 (receipt expense PDF)
+    "task_23": BankReconciliationTask("task_23"),          # Bank reconciliation from CSV
     "task_24": LedgerCorrectionTask("task_24"),         # Find & correct 4 ledger errors
+    "task_28": ExpenseAnalysisTask("task_28"),           # Expense analysis + projects + activities         # Find & correct 4 ledger errors
     "task_25": OverdueInvoiceTask("task_25"),           # Overdue invoice + reminder + partial payment
     "task_26": CurrencyExchangeTask("task_26"),         # Currency exchange agio/disagio
+    "task_29": ProjectLifecycleTask("task_29"),           # Full project lifecycle (budget+hours+supplier cost+invoice)
+    "task_30": YearEndTask("task_30"),                     # Year-end closing: depreciation + tax provision
+    "task_19": EmployeePDFTask("task_19"),                   # Employee from PDF employment contract
+    "task_20": SupplierInvoicePDFTask("task_20"),             # Supplier invoice from PDF (leverandørfaktura)
+    "task_21": SupplierInvoicePDFTask("task_21"),             # Same as task_20 (supplier invoice PDF)
 }
 
 
@@ -97,11 +122,12 @@ class GameSimulator:
             os.path.dirname(os.path.dirname(__file__)), "logs", "simulator"
         )
 
-    def _send_solve(self, prompt: str, task_id: str | None = None) -> dict:
-        """Send a task to the local /solve endpoint."""
+    async def _send_solve(self, prompt: str, task_id: str | None = None,
+                          files: list[dict] | None = None) -> dict:
+        """Send a task to the local /solve endpoint (async for parallel support)."""
         payload = {
             "prompt": prompt,
-            "files": [],
+            "files": files or [],
             "tripletex_credentials": {
                 "base_url": self.base_url,
                 "session_token": self.session_token,
@@ -111,8 +137,8 @@ class GameSimulator:
         headers = {}
         if self.agent_api_key:
             headers["Authorization"] = f"Bearer {self.agent_api_key}"
-        with httpx.Client(timeout=300, verify=False) as client:
-            resp = client.post(f"{self.agent_url}/solve", json=payload, headers=headers)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(600.0), verify=False) as client:
+            resp = await client.post(f"{self.agent_url}/solve", json=payload, headers=headers)
             return resp.json()
 
     def _read_run_log(self, task_id: str) -> tuple[int, int]:
@@ -180,9 +206,12 @@ class GameSimulator:
             # Setup prerequisites (e.g., pre-create customer + invoice for payment tasks)
             task.setup(self.base_url, self.session_token, expected)
 
+            # Get file attachments (PDFs, receipts) if the task provides them
+            files = task.get_files(expected)
+
             # Send to agent
             start = time.monotonic()
-            self._send_solve(prompt, task_id=task_id)
+            await self._send_solve(prompt, task_id=task_id, files=files)
             duration = time.monotonic() - start
 
             # Read run log for call/error counts
@@ -215,15 +244,44 @@ class GameSimulator:
         finally:
             verifier.close()
 
-    async def run_all(self, task_ids: list[str] | None = None) -> SimulatorReport:
-        """Run all tasks (or a subset) and return aggregated report."""
+    async def run_all(self, task_ids: list[str] | None = None,
+                      parallel: int = 1) -> SimulatorReport:
+        """Run all tasks (or a subset) and return aggregated report.
+
+        Args:
+            task_ids: List of task IDs to run (default: all).
+            parallel: Number of tasks to run concurrently (default: 1 = sequential).
+        """
         ids = task_ids or list(ALL_TASKS.keys())
         report = SimulatorReport()
 
-        for task_id in ids:
-            result = await self.run_task(task_id)
-            result.print_details()
-            report.results.append(result)
+        if parallel <= 1:
+            # Sequential (original behavior)
+            for task_id in ids:
+                result = await self.run_task(task_id)
+                result.print_details()
+                report.results.append(result)
+        else:
+            # Concurrent — run up to `parallel` tasks at a time
+            import asyncio
+            semaphore = asyncio.Semaphore(parallel)
+
+            async def run_with_semaphore(task_id: str) -> TaskResult:
+                async with semaphore:
+                    return await self.run_task(task_id)
+
+            results = await asyncio.gather(
+                *(run_with_semaphore(tid) for tid in ids),
+                return_exceptions=True,
+            )
+            for i, result in enumerate(results):
+                if isinstance(result, Exception):
+                    result = TaskResult(
+                        task_id=ids[i], task_name="Error", tier=1,
+                        prompt="", error=str(result),
+                    )
+                result.print_details()
+                report.results.append(result)
 
         report.print_summary()
         return report

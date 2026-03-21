@@ -47,7 +47,7 @@ class APIValidator:
 
         return None
 
-    def validate(self, method: str, path: str, json_body: dict | None,
+    def validate(self, method: str, path: str, json_body: dict | list | None,
                  params: dict | None = None) -> list[str]:
         """Validate an API call against the spec. Returns list of warnings (empty = valid)."""
         warnings: list[str] = []
@@ -84,7 +84,9 @@ class APIValidator:
             # Don't add to warnings — allow the call through
 
         # 4. Validate json_body against schema (for POST/PUT)
-        if json_body and method_lower in ("post", "put"):
+        # Skip validation for list bodies (e.g., PUT /supplierInvoice/voucher/{id}/postings
+        # expects a JSON array, not a dict)
+        if json_body and isinstance(json_body, dict) and method_lower in ("post", "put"):
             schema_ref = self._get_request_body_ref(endpoint)
             if schema_ref:
                 schema_name = schema_ref.split("/")[-1]
@@ -92,7 +94,7 @@ class APIValidator:
 
         return warnings
 
-    def _check_hard_rules(self, method: str, path: str, json_body: dict | None,
+    def _check_hard_rules(self, method: str, path: str, json_body: dict | list | None,
                           params: dict | None, warnings: list[str]):
         """Enforce rules learned from competition failures. These prevent known 4xx errors."""
         method_upper = method.upper()
@@ -107,7 +109,7 @@ class APIValidator:
                 )
 
         # Rule 2: Orders must have deliveryDate
-        if json_body and method_upper == "POST":
+        if json_body and isinstance(json_body, dict) and method_upper == "POST":
             # Inline orders in POST /invoice
             if path == "/invoice" and isinstance(json_body.get("orders"), list):
                 for i, order in enumerate(json_body["orders"]):
@@ -123,13 +125,29 @@ class APIValidator:
                     "— use today's date. Without it: 422 error."
                 )
 
+        # Rule 2b: POST /invoice requires invoiceDueDate
+        if json_body and isinstance(json_body, dict) and method_upper == "POST" and path == "/invoice":
+            if not json_body.get("invoiceDueDate"):
+                warnings.append(
+                    "invoiceDueDate is missing on invoice. POST /invoice REQUIRES "
+                    "invoiceDueDate — set to ~30 days after invoiceDate. Without it: 422 error."
+                )
+
         # Rule 3: Voucher postings row=0 — auto-fixed in fix_postings_rows(), not blocked here
 
         # Rule 4: amountGross/amountGrossCurrency mismatch — auto-fixed, not blocked
         # Both are handled in the auto-fix pipeline (fix_postings_rows + _fix_amount_gross_currency)
         # called from agent_service before the HTTP call
-        if json_body and method_upper in ("POST", "PUT"):
+        if json_body and isinstance(json_body, dict) and method_upper in ("POST", "PUT"):
             self._fix_amount_gross_currency(json_body)
+
+        # Rule 4b: POST /project/orderline requires date field
+        if method_upper == "POST" and path == "/project/orderline" and json_body and isinstance(json_body, dict):
+            if not json_body.get("date"):
+                warnings.append(
+                    "POST /project/orderline REQUIRES 'date' field — use today's date. "
+                    "Without it: 422 error."
+                )
 
         # Rule 5: GET /ledger/postingByDate does NOT support fields parameter
         if method_upper == "GET" and "/ledger/postingByDate" in path and params:
@@ -140,7 +158,7 @@ class APIValidator:
                 )
 
         # Rule 6: POST /project requires projectManager
-        if method_upper == "POST" and path == "/project" and json_body:
+        if method_upper == "POST" and path == "/project" and json_body and isinstance(json_body, dict):
             if not json_body.get("projectManager"):
                 warnings.append(
                     "POST /project REQUIRES 'projectManager' field with employee {id}. "
@@ -161,6 +179,15 @@ class APIValidator:
                     f"PUT /:payment requires paidAmount, paymentDate, paymentTypeId as "
                     f"QUERY PARAMETERS (params=), NOT in json_body. Found {payment_params} "
                     f"in body. Fix: move them to params dict."
+                )
+
+        # Rule 8: paymentTypeId=0 on invoice payment causes HTTP 500
+        if method_upper == "PUT" and "/:payment" in path and params:
+            pt_id = params.get("paymentTypeId")
+            if pt_id is not None and str(pt_id) == "0":
+                warnings.append(
+                    "paymentTypeId=0 causes HTTP 500 errors. First GET /invoice/paymentType "
+                    "to find a valid ID (look for description='Betalt til bank'), then use that ID."
                 )
 
         # Rule 6: SupplierInvoiceDTO does NOT have amountOutstanding field
@@ -229,11 +256,14 @@ class APIValidator:
                         f"to match amountGross"
                     )
 
-    def fix_postings_rows(self, method: str, path: str, json_body: dict | None) -> dict | None:
+    def fix_postings_rows(self, method: str, path: str, json_body: dict | list | None) -> dict | list | None:
         """Auto-fix row=0 in voucher postings. Row 0 is system-reserved; renumber from 1."""
         if not json_body or method.upper() not in ("POST", "PUT"):
             return json_body
         if "/ledger/voucher" not in path:
+            return json_body
+        # List bodies (e.g., PUT /supplierInvoice/voucher/{id}/postings) don't have postings key
+        if not isinstance(json_body, dict):
             return json_body
 
         postings = json_body.get("postings")
@@ -249,9 +279,12 @@ class APIValidator:
             logger.info("Auto-fixed row=0 in voucher postings (renumbered from 1)")
         return json_body
 
-    def strip_readonly_fields(self, method: str, path: str, json_body: dict | None) -> dict | None:
+    def strip_readonly_fields(self, method: str, path: str, json_body: dict | list | None) -> dict | list | None:
         """Remove read-only fields from the request body. Returns cleaned body."""
         if not json_body or method.lower() not in ("post", "put"):
+            return json_body
+        # List bodies (e.g., PUT /supplierInvoice/voucher/{id}/postings) — skip stripping
+        if not isinstance(json_body, dict):
             return json_body
 
         spec_path = self._resolve_path(path)

@@ -29,7 +29,7 @@ class TripletexClient:
         method: str,
         path: str,
         params: dict | None = None,
-        json_body: dict | None = None,
+        json_body: dict | list | None = None,
     ) -> dict:
         """Make an API call to Tripletex. Returns {status_code, body, ok}."""
         url = f"{self.base_url}{path}"

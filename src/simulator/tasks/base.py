@@ -39,6 +39,14 @@ class BaseTask(ABC):
         """Query the API and verify the task result."""
         ...
 
+    def get_files(self, expected: dict) -> list[dict]:
+        """Return file attachments for this task (PDF receipts, contracts, etc.).
+
+        Override in subclasses that need to send files to the agent.
+        Returns list of dicts with keys: filename, content_base64, mime_type.
+        """
+        return []
+
     def setup(self, base_url: str, session_token: str, expected: dict):
         """Create any prerequisite data needed before the agent runs.
 

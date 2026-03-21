@@ -36,6 +36,13 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 
 Expose locally via HTTPS for testing:
 
+# Option 1: ngrok (recommended — no timeout issues)
+ngrok http 8000
+ 
+# Option 2: Cloudflare Tunnel
+# ⚠️ Cloudflare Tunnel has a hard 120-second timeout.
+# Tasks can take up to 300 seconds, so longer tasks WILL fail.
+# Use ngrok if your agent needs more than 2 minutes per task.
 npx cloudflared tunnel --url http://localhost:8000
 
 Tripletex API Examples

@@ -10,10 +10,17 @@ from __future__ import annotations
 import logging
 import os
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _strip_accents(text: str) -> str:
+    """Remove diacritical marks (accents) for fuzzy keyword matching."""
+    nfkd = unicodedata.normalize("NFKD", text)
+    return "".join(c for c in nfkd if unicodedata.category(c) != "Mn")
 
 
 # ---------------------------------------------------------------------------
@@ -110,9 +117,10 @@ TASK_KEYWORDS: dict[str, list[tuple[set[str], float]]] = {
         ({"account", "konto", "compte", "conta", "cuenta"}, 0.5),
     ],
     "task_12": [  # Payroll
-        ({"payroll", "lønn", "gehaltsabrechnung", "paie", "nómina", "folha de pagamento"}, 3.0),
-        ({"salary", "grunnlønn", "grundgehalt", "salaire de base", "salario base"}, 2.0),
-        ({"bonus", "engangsbonus", "prime", "prima"}, 2.0),
+        ({"payroll", "lønn", "lønnsslipp", "gehaltsabrechnung", "paie", "nómina", "folha de pagamento", "busta paga"}, 3.0),
+        ({"salary", "salaire", "salario", "salário", "grunnlønn", "grundgehalt", "salaire de base", "salario base", "salário base", "stipendio base", "gehalt"}, 2.5),
+        ({"bonus", "engangsbonus", "prime unique", "prima", "bónus", "bonificación", "bonificação"}, 2.5),
+        ({"processe", "processar", "process payroll", "ejecute", "exécutez", "run payroll", "kjør lønn"}, 1.5),
     ],
     "task_13": [  # Travel expense
         ({"travel expense", "reiseregning", "reise", "note de frais", "nota de gastos",
@@ -150,6 +158,26 @@ TASK_KEYWORDS: dict[str, list[tuple[set[str], float]]] = {
         ({"reverse", "reverta", "revierta", "annuler", "rückgängig"}, 2.5),
         ({"bank"}, 1.0),
     ],
+    "task_20": [  # Supplier invoice from PDF (leverandørfaktura) — also covers task_21
+        ({"leverandørfaktura", "leverandorfaktura", "supplier invoice", "facture fournisseur",
+          "factura del proveedor", "fatura do fornecedor", "lieferantenrechnung", "fattura fornitore"}, 4.0),
+        ({"vedlagt", "attached", "ci-joint", "adjunto", "anexo", "beigefügt", "allegato"}, 2.0),
+        ({"registrer fakturaen", "register the invoice", "enregistrer la facture",
+          "registrar la factura", "registrar a fatura", "rechnung erfassen"}, 2.0),
+        ({"utgiftskonto", "expense account", "compte de charges", "cuenta de gastos", "aufwandskonto",
+          "inngående mva", "input vat", "tva déductible", "iva deducible", "vorsteuer",
+          "inngaaande mva"}, 1.5),
+    ],
+    # NOTE: task_21 keywords REMOVED — identical to task_20, causing ambiguity penalty.
+    # task_21 prompts now classify as task_20, which has the same playbook (task_21 is aliased).
+    "task_23": [  # Bank reconciliation from CSV
+        ({"bankutskrift", "bank statement", "relevé bancaire", "extracto bancario",
+          "extrato bancário", "kontoauszug", "estratto conto"}, 4.0),
+        ({"avstemming", "avstem", "reconciliation", "rapprochement", "conciliación",
+          "conciliação", "abstimmung", "riconciliazione"}, 3.0),
+        ({"csv", ".csv"}, 2.0),
+        ({"innbetaling", "payment", "paiement", "pago", "pagamento", "zahlung"}, 1.0),
+    ],
     "task_28": [  # Analyze expense increase + create internal projects
         ({"aumento", "augmenté", "aumentaram", "increase", "incremento", "økt", "gestiegen"}, 3.0),
         ({"gastos", "charges", "despesa", "expense", "kostnader", "kosten"}, 2.0),
@@ -184,26 +212,44 @@ TASK_KEYWORDS: dict[str, list[tuple[set[str], float]]] = {
         ({"teilzahlung", "partial payment", "delbetaling", "paiement partiel", "pago parcial"}, 2.0),
         ({"1500", "3400"}, 1.5),  # Account numbers for receivables/fees
     ],
-    "task_26": [  # Currency exchange gain/loss (agio/disagio)
+    "task_26": [  # Month-end closing OR currency exchange gain/loss (agio/disagio)
         ({"agio", "disagio"}, 4.0),
         ({"valutadifferanse", "currency difference", "différence de change", "diferencia de cambio", "währungsdifferenz"}, 3.0),
+        ({"månedsavslutning", "month-end", "clôture mensuelle", "cierre mensual", "monatsabschluss",
+          "chiusura mensile", "fechamento mensal"}, 4.0),
+        ({"periodisering", "periodization", "périodisation", "periodización", "periodisierung",
+          "forskuddsbetalt", "prepaid", "constatées d'avance", "gastos anticipados"}, 3.0),
         ({"kurs", "exchange rate", "taux de change", "tipo de cambio", "wechselkurs"}, 2.0),
         ({"eur", "usd", "gbp", "sek", "dkk"}, 1.5),
         ({"8060", "8160"}, 1.5),  # Agio/disagio accounts
     ],
     "task_29": [  # Full project lifecycle (budget + hours + supplier costs + customer invoice)
-        ({"projektzyklus", "project cycle", "ciclo de proyecto", "ciclo do projeto", "cycle de projet", "prosjektsyklus"}, 5.0),
-        ({"projektabrechnungszyklus", "project billing cycle"}, 5.0),
-        ({"stunden erfassen", "log hours", "registrer timer", "enregistrer heures", "registrar horas"}, 3.0),
-        ({"lieferantenkosten", "supplier costs", "costes proveedor", "custos fornecedor", "coûts fournisseur", "leverandørkostnader"}, 3.0),
-        ({"kundenrechnung", "customer invoice", "factura cliente", "fatura cliente", "facture client", "kundefaktura"}, 2.5),
-        ({"budget"}, 2.0),
+        # "ciclo de vida" matches Spanish, "projektzyklus" German, "prosjektsyklus" Norwegian
+        ({"projektzyklus", "project lifecycle", "project cycle", "ciclo de vida",
+          "ciclo do projeto", "cycle de vie", "prosjektsyklus", "ciclo di vita",
+          "ciclo de vida completo"}, 5.0),
+        # "vollstandigen" matches German "vollständigen", "completo" matches Spanish/Portuguese/Italian
+        ({"vollstandig", "full project", "complete project", "completo del proyecto",
+          "cycle complet", "fullstendig prosjekt", "vida completo"}, 3.0),
+        # "registre horas" matches Spanish imperative, "erfassen sie stunden" German
+        ({"stunden erfassen", "erfassen sie stunden", "log hours", "registrer timer",
+          "enregistrer heures", "registrar horas", "registre horas", "registrare ore",
+          "registre as horas"}, 3.0),
+        # "costo de proveedor" matches Spanish, "leverandorkost" Norwegian
+        ({"lieferantenkosten", "supplier cost", "costo de proveedor", "costes proveedor",
+          "custo fornecedor", "custos fornecedor", "couts fournisseur", "cout fournisseur",
+          "leverandorkost", "costo fornitore"}, 3.0),
+        # "factura al cliente" matches Spanish, "kundefaktura" Norwegian
+        ({"kundenrechnung", "customer invoice", "factura al cliente", "factura cliente",
+          "fatura ao cliente", "fatura cliente", "facture au client", "facture client",
+          "kundefaktura", "fattura al cliente"}, 2.5),
+        ({"budget", "presupuesto", "orcamento", "orçamento", "bilancio"}, 2.0),
     ],
     "task_30": [  # Year-end closing with depreciation + tax provision (multiple assets)
         ({"årlig", "annuel", "anual", "annual", "jährlich", "årsavslutning", "jahresabschluss", "year-end", "clôture annuelle", "cierre anual"}, 3.0),
         ({"avskrivning", "depreciation", "amortissement", "depreciación", "depreciação", "abschreibung"}, 4.0),
         ({"immobilisations", "anlagen", "activos fijos", "ativos fixos", "fixed assets", "anleggsmidler"}, 3.0),
-        ({"programvare", "kontormaskiner", "kjøretøy", "it-utstyr"}, 3.0),  # Norwegian asset names commonly in prompts
+        ({"programvare", "kontormaskiner", "kjøretøy", "it-utstyr", "inventar"}, 3.0),  # Norwegian asset names commonly in prompts
         ({"skatteberegning", "tax provision", "provision d'impôt", "provisión fiscal", "steuerrückstellung"}, 2.5),
         ({"forskuddsbetalt", "prepaid", "constatées d'avance", "gastos anticipados", "vorausbezahlt"}, 2.0),
         ({"6010", "1209"}, 1.5),  # Depreciation expense / accumulated depreciation accounts
@@ -355,84 +401,97 @@ CURATED_PLAYBOOKS: dict[str, dict] = {
         ],
     },
     "task_11": {
-        "description": "Register supplier invoice",
+        "description": "Register supplier invoice (WITHOUT PDF — details given in text)",
         "golden_path": [
-            "GET /supplier?organizationNumber=X (find supplier)",
+            "GET /supplier?organizationNumber=X (find supplier — already exists for task_11)",
             "GET /ledger/account?number=XXXX,2400 (batch get expense + supplier debt accounts)",
-            "Try approach A: POST /incomingInvoice?sendTo=ledger (BETA — single call, ideal if it works)",
-            "If 403: Try approach B: POST /ledger/voucher + PUT /supplierInvoice/voucher/{id}/postings",
-            "If both fail: Fallback C: POST /ledger/voucher with voucherType=Leverandørfaktura and both postings",
+            "GET /ledger/voucherType?name=Leverandørfaktura (get voucherType ID — REQUIRED)",
+            "POST /ledger/voucher?sendToLedger=false — create voucher with voucherType=Leverandørfaktura, BOTH debit+credit postings, vendorInvoiceNumber=INV-XXXX",
+            "PUT /supplierInvoice/voucher/{VOUCHER_ID}/postings — THIS IS THE CRITICAL STEP that creates a proper SupplierInvoice record. Body: [{posting: {account: {id: EXPENSE_ACCT_ID}, amountGross: GROSS, amountGrossCurrency: GROSS, vatType: {id: 1}}}]. Without this step, the scorer finds NO supplierInvoice and scores 0.",
         ],
         "key_lessons": [
-            "APPROACH A (preferred): POST /incomingInvoice?sendTo=ledger — creates supplier invoice in ONE call. Body: {invoiceHeader: {vendorId: SUPPLIER_ID, invoiceDate: 'YYYY-MM-DD', dueDate: 'YYYY-MM-DD', invoiceAmount: GROSS_AMOUNT}, orderLines: [{externalId: 'line-1', row: 1, description: '...', accountId: EXPENSE_ACCT_ID, amountInclVat: GROSS_AMOUNT, vatTypeId: 1}]}. NOTE: externalId is REQUIRED on each orderLine. vatTypeId=1 for 25% ingoing VAT.",
-            "APPROACH B (if A returns 403): Two-step process: 1) POST /ledger/voucher?sendToLedger=false with ONLY credit posting: {date, vendorInvoiceNumber, postings: [{row:1, account:{id:2400_ID}, amountGross:-GROSS, amountGrossCurrency:-GROSS, supplier:{id}}]}. 2) PUT /supplierInvoice/voucher/{id}/postings?sendToLedger=true with OrderLinePosting schema: [{posting: {account: {id: EXPENSE_ID}, amountGross: GROSS, amountGrossCurrency: GROSS, vatType: {id: 1}}}]. CRITICAL: voucher in step 1 must have ONLY ONE posting (the credit), because PUT fails with 'Can not put postings on a voucher that already have postings'.",
-            "FALLBACK C: POST /ledger/voucher with voucherType=Leverandørfaktura and both debit+credit postings. This creates a voucher but may NOT appear in GET /supplierInvoice — use as last resort.",
-            "Gross amount is TTC (VAT included). Net = gross / 1.25 for 25% VAT.",
-            "vendorInvoiceNumber carries the invoice reference (INV-XXXX).",
+            "CRITICAL: POST /incomingInvoice ALWAYS returns 403 on the competition proxy. Do NOT try it — it wastes an API call and adds an error. Skip directly to the voucher approach.",
+            "CRITICAL: Creating a voucher alone (POST /ledger/voucher) does NOT create a SupplierInvoice record. The scorer checks GET /supplierInvoice and finds nothing → score 0.00. You MUST call PUT /supplierInvoice/voucher/{id}/postings after creating the voucher to register it as a proper SupplierInvoice.",
+            "Step 1: POST /ledger/voucher?sendToLedger=false with BOTH postings (the voucher MUST balance — single-posting vouchers fail with 422 'sum not 0'). Body: {date: 'YYYY-MM-DD', description: 'Supplier name - services', vendorInvoiceNumber: 'INV-XXXX-NNNN', voucherType: {id: VOUCHER_TYPE_ID}, postings: [{row: 1, account: {id: EXPENSE_ACCT_ID}, amountGross: GROSS_AMOUNT, amountGrossCurrency: GROSS_AMOUNT, vatType: {id: 1}, description: 'description'}, {row: 2, account: {id: ACCT_2400_ID}, amountGross: -GROSS_AMOUNT, amountGrossCurrency: -GROSS_AMOUNT, supplier: {id: SUPPLIER_ID}, invoiceNumber: 'INV-XXXX-NNNN', termOfPayment: 'DUE_DATE_YYYY-MM-DD', description: 'Supplier name'}]}",
+            "Step 2: PUT /supplierInvoice/voucher/{VOUCHER_ID}/postings — body is a JSON ARRAY (not dict): [{\"posting\": {\"account\": {\"id\": EXPENSE_ACCT_ID}, \"amountGross\": GROSS_AMOUNT, \"amountGrossCurrency\": GROSS_AMOUNT, \"vatType\": {\"id\": 1}}}]. This converts the voucher into a SupplierInvoice. If it returns 403, fall back: PUT /ledger/voucher/{VOUCHER_ID}?sendToLedger=true (with the voucher body) to at least book the voucher to ledger.",
+            "IMPORTANT: The json_body for PUT /supplierInvoice/voucher/{id}/postings is a JSON ARRAY (list), not a dict. Pass it as: [{\"posting\": {\"account\": {\"id\": X}, \"amountGross\": Y, \"amountGrossCurrency\": Y, \"vatType\": {\"id\": 1}}}]",
+            "voucherType MUST be set to Leverandørfaktura (get ID from GET /ledger/voucherType?name=Leverandørfaktura). Without it the voucher is not recognized as a supplier invoice.",
+            "Gross amount is TTC (VAT included). Net = gross / 1.25 for 25% VAT. vatTypeId=1 is '25% ingoing VAT deduction'.",
+            "vendorInvoiceNumber on the voucher carries the invoice reference (INV-XXXX-NNNN).",
             "MUST set both amountGross AND amountGrossCurrency (same value for NOK).",
+            "Set invoiceNumber and termOfPayment on the credit posting (account 2400) — invoiceNumber='INV-XXXX-NNNN', termOfPayment='YYYY-MM-DD' (due date, typically 30 days from invoice date).",
+            "Due date: if not specified in the prompt, use invoice date + 30 days.",
         ],
     },
     "task_12": {
         "description": "Run payroll for employee with base salary and bonus",
         "golden_path": [
-            "GET /employee?email=X (find the employee)",
-            "GET /salary/type?isInactive=false (find salary type IDs — look for 'Fastlønn'/'Fast lønn' for base salary and 'Bonus' for bonus)",
-            "GET /employee/employment?employeeId=X (check if employment exists)",
-            "If no employment: set up employment (see prerequisites below), then retry",
-            "POST /salary/transaction?generateTaxDeduction=true (with nested payslips array — see body structure below)",
+            "STEP 1 (parallel) — GET /employee?email=X&fields=id,firstName,lastName,dateOfBirth AND GET /salary/type?isInactive=false&fields=id,name (WARNING: field 'code' does NOT exist — only id,name) AND GET /employee/employment?employeeId=X&fields=id,startDate,division",
+            "STEP 2 (MANDATORY — dateOfBirth is ALWAYS null) — PUT /employee/{id} with {id:ID, version:VERSION, firstName:FIRST, lastName:LAST, dateOfBirth:'1990-01-15'} — you already have version from step 1",
+            "STEP 3 (if no employment) — POST /employee/employment with ONLY {employee:{id:EMP_ID}, startDate:'2026-01-01', taxDeductionCode:'loennFraHovedarbeidsgiver', isMainEmployer:true} — do NOT nest employmentDetails here",
+            "STEP 4 — POST /employee/employment/details with {employment:{id:EMPLOYMENT_ID}, date:'2026-01-01', employmentType:'ORDINARY', remunerationType:'MONTHLY_WAGE', workingHoursScheme:'NOT_SHIFT', percentageOfFullTimeEquivalent:100.0, annualSalary:BASE_SALARY*12, monthlySalary:BASE_SALARY}",
+            "STEP 5 (parallel, if no division) — GET /municipality?count=1&fields=id,name AND GET /token/session/>whoAmI (NO fields param!) then GET /company/{companyId}?fields=id,name,organizationNumber",
+            "STEP 6 — POST /division with {name:'Hovedavdeling', organizationNumber:'DIFFERENT_9_DIGITS', startDate:'2026-01-01', municipalityDate:'2026-01-01', municipality:{id:MUNI_ID}} — org number: take company's, change first digit (e.g. 668→968)",
+            "STEP 7 — PUT /employee/employment/{id} with {id:EMPL_ID, version:VER, employee:{id:EMP_ID}, startDate:'2026-01-01', taxDeductionCode:'loennFraHovedarbeidsgiver', isMainEmployer:true, division:{id:DIV_ID}}",
+            "STEP 8 — POST /salary/transaction?generateTaxDeduction=true — EXACT body: {date:'YYYY-MM-DD', year:YYYY, month:M, payslips:[{employee:{id:EMP_ID}, date:'YYYY-MM-DD', year:YYYY, month:M, specifications:[{salaryType:{id:FASTLONN_ID}, rate:BASE_AMT, count:1, amount:BASE_AMT}, {salaryType:{id:BONUS_ID}, rate:BONUS_AMT, count:1, amount:BONUS_AMT}]}]}",
         ],
         "key_lessons": [
-            "POST /salary/transaction body: {date: 'YYYY-MM-DD', year: YYYY, month: M, payslips: [{employee: {id}, date: 'YYYY-MM-DD', year: YYYY, month: M, specifications: [{salaryType: {id: FASTLONN_ID}, rate: BASE_AMOUNT, count: 1}, {salaryType: {id: BONUS_ID}, rate: BONUS_AMOUNT, count: 1}]}]}",
-            "Use generateTaxDeduction=true query param to auto-calculate tax.",
-            "PREREQUISITE: Employee MUST have an active employment record linked to a division. Without this you get 422 'Ansatt er ikke registrert med et arbeidsforhold i perioden'.",
-            "Employment setup if needed: 1) PUT /employee to set dateOfBirth if missing, 2) POST /employee/employment with {employee:{id}, startDate, taxDeductionCode:'loennFraHovedarbeidsgiver', isMainEmployer:true}, 3) POST /employee/employment/details with {employment:{id}, date:startDate, employmentType:'ORDINARY', remunerationType:'MONTHLY_WAGE', workingHoursScheme:'NOT_SHIFT', percentageOfFullTimeEquivalent:100.0}, 4) POST /division to create a division, 5) PUT /employee/employment/{id} to link division={id}.",
-            "After linking the division you get 422 'Arbeidsforholdet er ikke knyttet mot en virksomhet' if division is missing.",
-            "Salary type IDs vary per sandbox — always GET /salary/type first to discover the correct IDs. Search for name containing 'Fast' for base salary and 'Bonus' for bonus.",
-            "employmentType enum: ORDINARY, MARITIME, FREELANCE, NOT_CHOSEN. remunerationType enum: MONTHLY_WAGE, HOURLY_WAGE, COMMISION_PERCENTAGE, FEE, NOT_CHOSEN, PIECEWORK_WAGE. workingHoursScheme enum: NOT_SHIFT, ROUND_THE_CLOCK, SHIFT_365, OFFSHORE_336, CONTINUOUS, OTHER_SHIFT, NOT_CHOSEN.",
+            "FOLLOW STEPS IN ORDER. Do NOT skip ahead. dateOfBirth (step 2) BEFORE employment (step 3). Division (step 6) BEFORE linking (step 7). Linked employment (step 7) BEFORE salary transaction (step 8).",
+            "CRITICAL — Division organizationNumber MUST be DIFFERENT from the company's org number. Using the company's gives 422. Solution: take company org number and change first digit (e.g. 668491863 → 968491863).",
+            "CRITICAL — GET /salary/type: use fields=id,name ONLY. 'code' does NOT exist on SalaryTypeDTO. Find name='Fastlønn' for base salary and name='Bonus' for bonus.",
+            "CRITICAL — GET /token/session/>whoAmI: do NOT pass fields=id,company. Use NO fields param at all. Response has companyId at top level.",
+            "CRITICAL — Employee dateOfBirth is ALWAYS null. You MUST set it via PUT /employee BEFORE creating employment.",
+            "CRITICAL — POST /employee/employment/details: SEPARATE call. String enum values: employmentType='ORDINARY', remunerationType='MONTHLY_WAGE', workingHoursScheme='NOT_SHIFT'. Include annualSalary and monthlySalary.",
+            "Division POST requires ALL of: name, organizationNumber, startDate, municipalityDate, municipality:{id}. Missing any → 422.",
+            "ALWAYS include amount=rate*count on each salary specification. Salary type IDs vary per sandbox — discover via GET /salary/type.",
         ],
     },
     "task_13": {
-        "description": "Register travel expense with per diem and costs",
+        "description": "Register travel expense with per diem and costs, then deliver it",
         "golden_path": [
-            "GET /employee?email=X (find the employee)",
+            "GET /employee?email=X&fields=id,firstName,lastName,email (find the employee)",
             "GET /travelExpense/rateCategory?type=PER_DIEM&dateFrom=YYYY-MM-01&dateTo=YYYY-MM-28&name=Overnatting&fields=id,name,type (find overnight rate category — MUST filter by dateFrom/dateTo)",
             "GET /travelExpense/rate?rateCategoryId=X&fields=id,rate (find rateType ID — ONLY use fields id,rate — 'name' and 'type' do NOT exist on TravelExpenseRateDTO)",
-            "GET /travelExpense/costCategory?isInactive=false&fields=id,description (find IDs — 'name' does NOT exist, use 'description'. Look for 'Fly'/'Flybillett' for flight, 'Taxi'/'Drosje' for taxi)",
+            "GET /travelExpense/costCategory?isInactive=false&fields=id,description (find IDs — 'name' does NOT exist, use 'description'. Look for 'Fly' for flight, 'Taxi' for taxi)",
             "GET /travelExpense/paymentType?isInactive=false&fields=id,description (find payment type — 'name' does NOT exist, use 'description')",
             "POST /travelExpense with nested perDiemCompensations and costs (see exact body below)",
+            "PUT /travelExpense/:deliver?id=TRAVEL_EXPENSE_ID (CRITICAL — deliver/submit the expense! Without this step the expense stays in draft and the task is incomplete)",
         ],
         "key_lessons": [
             "EXACT POST /travelExpense body — follow this structure precisely:\n"
             "{\n"
             "  employee: {id: EMPLOYEE_ID},\n"
-            "  title: 'Trip title here',\n"
+            "  title: 'EXACT title from prompt in quotes',\n"
             "  travelDetails: {\n"
             "    departureDate: 'YYYY-MM-DD', returnDate: 'YYYY-MM-DD',\n"
             "    departureTime: '08:00', returnTime: '18:00',\n"
-            "    departureFrom: 'Oslo', destination: 'Bergen',\n"
-            "    purpose: 'Trip purpose here',\n"
+            "    departureFrom: 'Oslo', destination: 'DESTINATION_CITY',\n"
+            "    purpose: 'SAME as title from the prompt',\n"
             "    isForeignTravel: false, isDayTrip: false\n"
             "  },\n"
             "  perDiemCompensations: [{\n"
             "    rateCategory: {id: RATE_CATEGORY_ID},\n"
             "    rateType: {id: RATE_TYPE_ID},\n"
             "    overnightAccommodation: 'HOTEL',\n"
-            "    location: 'Destination city',\n"
-            "    count: NUMBER_OF_DAYS\n"
+            "    location: 'DESTINATION_CITY',\n"
+            "    count: NUMBER_OF_DAYS,\n"
+            "    rate: DAILY_RATE_FROM_PROMPT\n"
             "  }],\n"
             "  costs: [\n"
-            "    {costCategory: {id: FLIGHT_CAT_ID}, paymentType: {id: PAY_TYPE_ID}, amountCurrencyIncVat: FLIGHT_AMOUNT, date: 'YYYY-MM-DD', comments: 'Flight'},\n"
-            "    {costCategory: {id: TAXI_CAT_ID}, paymentType: {id: PAY_TYPE_ID}, amountCurrencyIncVat: TAXI_AMOUNT, date: 'YYYY-MM-DD', comments: 'Taxi'}\n"
+            "    {costCategory: {id: FLIGHT_CAT_ID}, paymentType: {id: PAY_TYPE_ID}, amountCurrencyIncVat: FLIGHT_AMOUNT, date: 'DEPARTURE_DATE', comments: 'Flybillett'},\n"
+            "    {costCategory: {id: TAXI_CAT_ID}, paymentType: {id: PAY_TYPE_ID}, amountCurrencyIncVat: TAXI_AMOUNT, date: 'RETURN_DATE', comments: 'Taxi'}\n"
             "  ]\n"
             "}",
-            "FIELD NAME RULES: 'title' goes on the TravelExpense root (NOT in travelDetails). 'purpose' goes inside travelDetails. departureDate/returnDate go inside travelDetails (NOT on root).",
-            "Cost fields: use 'costCategory' (NOT 'category'), 'comments' (NOT 'description'), 'amountCurrencyIncVat' (NOT 'amount'). Cost does NOT have 'count' field — VERIFIED: 'count' causes 422 'Feltet eksisterer ikke i objektet'.",
+            "AFTER creating the travel expense: MUST call PUT /travelExpense/:deliver?id=EXPENSE_ID to deliver/submit it. Without delivery the expense stays in draft status and is scored as incomplete.",
+            "FIELD NAME RULES: 'title' goes on the TravelExpense root (NOT in travelDetails). 'purpose' goes inside travelDetails and should match the title. departureDate/returnDate go inside travelDetails (NOT on root).",
+            "ALWAYS set 'rate' on per diem to the daily rate specified in the prompt (e.g. 800). This overrides the system default rate.",
+            "Cost fields: use 'costCategory' (NOT 'category'), 'comments' (NOT 'description'), 'amountCurrencyIncVat' (NOT 'amount'). Cost does NOT have 'count' field — 'count' causes 422.",
             "Per diem: use 'count' for number of days (NOT 'countDays'). MUST include 'rateType': {id: RATE_ID} from GET /travelExpense/rate. Do NOT include 'countryCode' — it causes 'Country not enabled for travel expense' error.",
             "CRITICAL: Rate categories are date-dependent. Use dateFrom/dateTo matching the travel dates. Without date filter, you get old expired categories that cause 422 'dato samsvarer ikke med valgt satskategori'.",
             "FIELD NAME WARNING: TravelExpenseRateDTO has 'id' and 'rate' fields but NOT 'name' or 'type'. TravelCostCategoryDTO has 'id' and 'description' but NOT 'name'. Using wrong field names in ?fields= causes 400 errors. Always use fields=id,description for costCategory and fields=id,rate for rate.",
-            "Do NOT set manual rate/amount on per diem unless the prompt specifies a custom rate. Let the system calculate from rateCategory.",
             "overnightAccommodation enum: NONE, HOTEL, BOARDING_HOUSE_WITHOUT_COOKING, BOARDING_HOUSE_WITH_COOKING. Use HOTEL for multi-day trips.",
             "Creating everything nested in one POST avoids 409 RevisionException that occurs when creating costs separately.",
+            "Date calculation: For N-day trip, set departureDate = today minus N days, returnDate = today minus 1 day (or yesterday). The trip should be in the past.",
         ],
     },
     "task_14": {
@@ -526,26 +585,29 @@ CURATED_PLAYBOOKS: dict[str, dict] = {
         ],
     },
     "task_28": {
-        "description": "Analyze expense increase between months + create internal projects with activities",
+        "description": "Analyze expense increase between months + create internal projects with unique activities",
         "golden_path": [
             "GET /token/session/>whoAmI (get employee ID for projectManager — REQUIRED before creating projects)",
             "GET /ledger/postingByDate?dateFrom=2026-01-01&dateTo=2026-02-01&count=5000 (January postings — NO fields param!)",
             "GET /ledger/postingByDate?dateFrom=2026-02-01&dateTo=2026-03-01&count=5000 (February postings)",
-            "GET /activity?isProjectActivity=true&count=1 (find an existing project activity to link)",
-            "Analyze: sum amounts per account (expense accounts 5000-7999), compute Feb-Jan delta, find top 3 increases",
-            "GET /ledger/account?id=X,Y,Z (get account names for the top 3 account IDs)",
-            "POST /project for EACH of the 3 accounts (name=account name, projectManager={id}, isInternal=true, startDate=today)",
-            "POST /project/projectActivity for EACH project (link the activity found in step 4)",
+            "Use aggregate_postings tool on EACH month's response to get per-account sums (don't calculate manually!)",
+            "Compare the aggregated results: for each expense account (5000-7999), compute Feb total - Jan total",
+            "GET /ledger/account?id=X,Y,Z (get account names for the top 3 account IDs by increase)",
+            "For EACH of the 3 accounts: POST /activity with {name: 'Kostnadsanalyse - ACCOUNT_NAME', activityType: 'PROJECT_GENERAL_ACTIVITY'}",
+            "For EACH of the 3 accounts: POST /project with {name: ACCOUNT_NAME, projectManager:{id}, isInternal:true, startDate:today}",
+            "For EACH project: POST /project/projectActivity with {project:{id:PROJECT_ID}, activity:{id:NEW_ACTIVITY_ID}} to link the NEW activity",
         ],
         "key_lessons": [
+            "CRITICAL: Create a NEW activity for EACH project via POST /activity. Do NOT reuse existing activities. The task says 'create an activity FOR EACH project' — the scoring checks that each project has its own unique activity.",
+            "CRITICAL: Use the aggregate_postings tool to sum postings by account — don't manually sum in your reasoning. Pass the raw API response body to the tool.",
             "CRITICAL: GET /ledger/postingByDate does NOT support the fields parameter — always returns 422 if you include it. Omit fields entirely.",
-            "CRITICAL: POST /project REQUIRES projectManager field — always do GET /token/session/>whoAmI FIRST to get employee ID",
-            "POST /project also REQUIRES startDate — use today's date",
-            "Create projects SEQUENTIALLY, not in parallel — parallel creation causes 500/409 errors from race conditions",
-            "Use GET /ledger/postingByDate (not /ledger/posting) — it returns postings grouped by date and is more efficient",
-            "dateFrom is inclusive, dateTo is EXCLUSIVE (so dateTo=2026-02-01 covers all of January)",
-            "Expense accounts are in the 5000-7999 range in Norwegian chart of accounts",
-            "The activity linked to each project should be an existing PROJECT_GENERAL_ACTIVITY type",
+            "CRITICAL: POST /project REQUIRES projectManager field — always do GET /token/session/>whoAmI FIRST to get employee ID.",
+            "POST /project also REQUIRES startDate — use today's date.",
+            "Create projects SEQUENTIALLY, not in parallel — parallel creation causes 500/409 errors from race conditions.",
+            "dateFrom is inclusive, dateTo is EXCLUSIVE (so dateTo=2026-02-01 covers all of January).",
+            "Expense accounts are in the 5000-7999 range in Norwegian chart of accounts.",
+            "POST /activity body: {name: 'Kostnadsanalyse - AccountName', activityType: 'PROJECT_GENERAL_ACTIVITY'}. The activity is then linked via POST /project/projectActivity.",
+            "Do NOT link the default 'Prosjektadministrasjon' activity — that's auto-created and doesn't count for scoring.",
         ],
     },
     "task_22": {
@@ -567,6 +629,67 @@ CURATED_PLAYBOOKS: dict[str, dict] = {
             "Let the VAT system auto-calculate by setting vatType on the debit posting",
             "Postings row starts at 1, amountGross must equal amountGrossCurrency",
             "Common VAT rates: 25% general (id=3), 15% food (id=31), 12% transport (id=5), 0% exempt (id=6)",
+        ],
+    },
+    "task_20": {
+        "description": "Register supplier invoice from attached PDF (leverandørfaktura) — also covers task_21",
+        "golden_path": [
+            "READ the attached PDF — extract ALL fields: supplier name, org number, address, invoice number (INV-XXXX-NNNN), invoice date, due date, net amount (ex VAT), VAT amount, gross amount (incl VAT), expense account (Konto: XXXX), bank account number",
+            "GET /supplier?organizationNumber=X (check if supplier already exists — search by org number for exact match)",
+            "If not found: POST /supplier with {name, organizationNumber, postalAddress: {addressLine1, postalCode, city, country: {id: 161}}, bankAccountPresentation: [{bban: 'BANK_ACCOUNT_NUMBER'}]}",
+            "GET /ledger/account?number=XXXX,2400 (batch get expense + supplier debt accounts)",
+            "GET /ledger/voucherType?name=Leverandørfaktura (get voucherType ID — REQUIRED)",
+            "POST /ledger/voucher?sendToLedger=false — create voucher with voucherType=Leverandørfaktura, BOTH debit+credit postings, vendorInvoiceNumber=INV-XXXX",
+            "PUT /supplierInvoice/voucher/{VOUCHER_ID}/postings — creates proper SupplierInvoice record. Body: [{posting: {account: {id: EXPENSE_ACCT_ID}, amountGross: GROSS, amountGrossCurrency: GROSS, vatType: {id: 1}}}]",
+        ],
+        "key_lessons": [
+            "CRITICAL: POST /incomingInvoice ALWAYS returns 403 on the competition proxy. Do NOT try it — skip directly to the voucher approach.",
+            "CRITICAL: Creating a voucher alone does NOT create a SupplierInvoice record. You MUST call PUT /supplierInvoice/voucher/{id}/postings to register it as a proper SupplierInvoice. Without this, the scorer finds no SupplierInvoice.",
+            "POST /supplier body uses bankAccountPresentation: [{bban: '12345678901'}] — NOT bankAccountNumber.",
+            "Include the supplier's address: parse street (addressLine1), postal code, and city from the PDF. country: {id: 161} is Norway.",
+            "The PDF text is pre-extracted — read it directly from the message, no need to decode base64.",
+            "Step 1: POST /ledger/voucher?sendToLedger=false with BOTH postings (must balance). Body: {"
+            "date: 'INVOICE_DATE', description: 'SUPPLIER_NAME - description', "
+            "voucherType: {id: VOUCHER_TYPE_ID}, vendorInvoiceNumber: 'INV-XXXX-NNNN', "
+            "postings: ["
+            "  {row: 1, account: {id: EXPENSE_ACCT_ID}, amountGross: GROSS_TOTAL, amountGrossCurrency: GROSS_TOTAL, vatType: {id: 1}, description: 'ITEM DESCRIPTION'}, "
+            "  {row: 2, account: {id: ACCT_2400_ID}, amountGross: -GROSS_TOTAL, amountGrossCurrency: -GROSS_TOTAL, supplier: {id: SUPPLIER_ID}, "
+            "   invoiceNumber: 'INV-XXXX-NNNN', termOfPayment: 'DUE_DATE', description: 'SUPPLIER_NAME'}]}",
+            "Step 2: PUT /supplierInvoice/voucher/{VOUCHER_ID}/postings — body is a JSON ARRAY (not dict): [{\"posting\": {\"account\": {\"id\": EXPENSE_ACCT_ID}, \"amountGross\": GROSS_TOTAL, \"amountGrossCurrency\": GROSS_TOTAL, \"vatType\": {\"id\": 1}}}]. This converts the voucher into a SupplierInvoice. If it returns 403, fall back: PUT /ledger/voucher/{VOUCHER_ID}?sendToLedger=true.",
+            "IMPORTANT: The json_body for PUT /supplierInvoice/voucher/{id}/postings is a JSON ARRAY (list), not a dict.",
+            "voucherType MUST be set to Leverandørfaktura — get ID from GET /ledger/voucherType?name=Leverandørfaktura.",
+            "Row 1 (debit): expense account, POSITIVE amountGross with vatType={id:1}. Row 2 (credit): account 2400, NEGATIVE amountGross with supplier reference.",
+            "vatTypeId=1 is 'Fradrag inngående avgift, høy sats' (25% incoming VAT deduction).",
+        ],
+    },
+    "task_21": {
+        "description": "Register supplier invoice from attached PDF (same as task_20)",
+        "alias": "task_20",
+    },
+    "task_23": {
+        "description": "Reconcile bank statement (CSV) against open invoices and supplier payments",
+        "golden_path": [
+            "READ the attached CSV file — use the parse_structured_data tool with format='ssv' (semicolon-separated) or 'csv' to get structured rows",
+            "GET /invoice?invoiceDateFrom=2020-01-01&invoiceDateTo=2030-12-31&fields=id,invoiceNumber,amount,amountOutstanding,customer(*) (find customer invoices)",
+            "For each INCOMING payment row in CSV: match to an invoice by amount or reference (e.g., 'Faktura 1001')",
+            "GET /invoice/paymentType?fields=id,description — find the ID where description='Betalt til bank' (MUST do before any payment calls)",
+            "PUT /invoice/{id}/:payment?paymentDate=DATE&paidAmount=AMOUNT&paymentTypeId=BANK_TYPE_ID (use discovered ID, NOT 0)",
+            "For partial payments: paidAmount = the CSV amount (less than full invoice amount)",
+            "For supplier payments ('Betaling Fornecedor/Leverandor X'): GET /supplier?name=X to find supplier ID",
+            "POST /ledger/voucher with postings: Row 1 debit 2400 with supplier:{id:X}, Row 2 credit 1920 — MUST include supplier reference on 2400 posting",
+            "For fees (Bankgebyr): POST /ledger/voucher debit 7770 or 8150 + credit 1920",
+            "For interest (Renteinntekter): check if Inn or Ut column — Inn=income (debit 1920, credit 8050), Ut=expense (debit 8150, credit 1920)",
+        ],
+        "key_lessons": [
+            "CRITICAL: paymentTypeId=0 causes HTTP 500 errors. ALWAYS GET /invoice/paymentType first and use the ID where description='Betalt til bank'. The field is 'description' NOT 'name'.",
+            "CRITICAL: Voucher postings on account 2400 (Leverandørgjeld) MUST include supplier:{id:X}. Without it → 422 'Leverandør mangler'. GET /supplier first to find the ID.",
+            "CRITICAL: Voucher date field is 'date' NOT 'voucherDate'. 'voucherDate' does not exist and gets blocked by the validator.",
+            "PUT /invoice/{id}/:payment requires QUERY params only — paymentDate, paidAmount, paymentTypeId. Do NOT send a JSON body.",
+            "InvoiceDTO fields: 'amount' and 'amountOutstanding' exist. 'amountRemaining' and 'amountRemainingCurrency' do NOT exist (cause 400).",
+            "CSV columns: Dato (date), Forklaring (description), Inn (incoming/positive), Ut (outgoing/negative), Saldo (balance). Use absolute values for amounts.",
+            "Match invoices by 'Faktura NNNN' reference in the CSV Forklaring column. Invoice numbers in Tripletex start from 1.",
+            "For partial payments, set paidAmount to the CSV amount. The system tracks remaining outstanding balance automatically.",
+            "Accounts: 1920 (Bank), 1500 (Kundefordringer), 2400 (Leverandørgjeld), 8050 (Annen renteinntekt), 8150 (Annen rentekostnad), 7770 (Bankgebyr).",
         ],
     },
     "task_19": {
@@ -654,52 +777,85 @@ CURATED_PLAYBOOKS: dict[str, dict] = {
         ],
     },
     "task_29": {
-        "description": "Full project lifecycle: create project, log hours, register supplier costs, create customer invoice",
+        "description": "Full project lifecycle: create project with budget, log timesheet hours, register supplier costs, create customer invoice",
         "golden_path": [
-            "GET /token/session/>whoAmI (get employee ID for project manager)",
-            "GET /customer?organizationNumber=X (find or create the customer)",
-            "GET /employee?email=X (find employees mentioned in the prompt — may need to create them)",
-            "POST /project with: name, projectManager={id}, customer={id}, isInternal=false, startDate=today",
-            "POST /project/projectActivity for each activity needed (link existing activities to project)",
-            "POST /timesheet/entry for each employee's hours (employee={id}, project={id}, activity={id}, hours, date)",
-            "For supplier costs: GET /supplier?organizationNumber=X, then POST /ledger/voucher to book the supplier cost",
-            "POST /order with customer, project, orderLines for the invoice amount",
-            "PUT /order/{id}/:invoice to create the customer invoice",
+            "STEP 0 — Parallel lookups (do ALL of these in one batch):",
+            "  GET /customer?organizationNumber=ORG_NR (find the customer)",
+            "  GET /employee?email=EMAIL_1 (find project manager employee)",
+            "  GET /employee?email=EMAIL_2 (find consultant employee)",
+            "  GET /supplier?organizationNumber=SUPPLIER_ORG (find the supplier)",
+            "",
+            "STEP 1 — Create project with budget:",
+            "  POST /project with: {name, projectManager:{id}, customer:{id}, startDate:'YYYY-MM-DD' (today), isInternal:false, isFixedPrice:true, fixedprice:BUDGET_AMOUNT}",
+            "  NOTE: The budget amount goes in 'fixedprice' field (NOT 'budget' — that field does NOT exist!)",
+            "",
+            "STEP 2 — Find activities for the project, then log timesheet hours:",
+            "  GET /activity/>forTimeSheet?projectId=PROJECT_ID&employeeId=EMPLOYEE_ID&date=TODAY",
+            "  This returns project-specific activities. Use 'Fakturerbart arbeid' (billable work) activity ID.",
+            "  POST /timesheet/entry {employee:{id:EMP1_ID}, project:{id:PROJECT_ID}, activity:{id:ACTIVITY_ID}, date:TODAY, hours:HOURS_1}",
+            "  WAIT for the first entry to succeed, THEN send the second:",
+            "  POST /timesheet/entry {employee:{id:EMP2_ID}, project:{id:PROJECT_ID}, activity:{id:ACTIVITY_ID}, date:TOMORROW, hours:HOURS_2}",
+            "  CRITICAL: Send timesheet entries ONE AT A TIME (sequentially, not in parallel) AND use DIFFERENT dates!",
+            "  Using the same date causes 409 Duplicate Entry errors even for different employees (API race condition).",
+            "  All dates must be >= project startDate — cannot register hours before the project starts.",
+            "",
+            "STEP 3 — Register supplier cost as a ledger voucher (NOT project/orderline — it doesn't link to supplier!):",
+            "  First find expense account and AP account in parallel:",
+            "  GET /ledger/account?number=4300,6300,6900,2400&fields=id,number,name (try 4300 first, fallback to 6300 or 6900 if 4300 doesn't exist)",
+            "  POST /ledger/voucher?sendToLedger=true with body:",
+            "    {date:'TODAY', description:'Supplier cost SUPPLIER_NAME - PROJECT_NAME', postings:[",
+            "      {row:1, account:{id:EXPENSE_ACCT_ID}, supplier:{id:SUPPLIER_ID}, project:{id:PROJECT_ID}, vatType:{id:1}, amountGross:COST_AMOUNT, amountGrossCurrency:COST_AMOUNT, description:'Supplier cost SUPPLIER_NAME'},",
+            "      {row:2, account:{id:AP_2400_ID}, supplier:{id:SUPPLIER_ID}, amountGross:-COST_AMOUNT, amountGrossCurrency:-COST_AMOUNT, description:'Accounts payable SUPPLIER_NAME'}",
+            "    ]}",
+            "  vatType:{id:1} = 'Fradrag inngående avgift, høy sats' (25% input VAT deduction) for the expense posting",
+            "  The credit posting (negative amount) goes to accounts payable 2400 — no VAT on the AP posting",
+            "",
+            "STEP 4 — Ensure bank account 1920 has a bank account number (required for invoicing):",
+            "  GET /ledger/account?number=1920&fields=id,number,version,bankAccountNumber",
+            "  IF bankAccountNumber is empty: PUT /ledger/account/{id} with {id, version, bankAccountNumber:'86011117947'}",
+            "",
+            "STEP 5 — Create customer invoice for the project (use POST /invoice with inline order):",
+            "  POST /invoice?sendToCustomer=false with body: {invoiceDate:'TODAY', invoiceDueDate:'TODAY+30days', customer:{id:CUST_ID}, orders:[{customer:{id:CUST_ID}, project:{id:PROJECT_ID}, orderDate:'TODAY', deliveryDate:'TODAY', orderLines:[{description:'Project services', count:1, unitPriceExcludingVatCurrency:BUDGET_AMOUNT, vatType:{id:3}}]}]}",
+            "  CRITICAL: invoiceDueDate is REQUIRED — set it to ~30 days after invoiceDate. Omitting it causes 422.",
+            "  The invoice amount should equal the project budget/fixedprice amount.",
         ],
         "key_lessons": [
-            "This is a FULL project billing cycle — not just project creation",
-            "POST /project REQUIRES projectManager and startDate (auto-validated)",
-            "POST /project does NOT accept 'budget' field — it will be blocked by the validator",
-            "For timesheet entries: use POST /timesheet/entry with employee, project, activity, date, hours",
-            "Supplier costs are booked as vouchers (POST /ledger/voucher), not through the project API",
-            "The customer invoice should cover all project costs — create via POST /order + PUT /order/:invoice",
-            "Find existing activities with GET /activity?isProjectActivity=true before creating project activities",
-            "If employees don't exist, create them first (POST /employee + department + userType='STANDARD')",
+            "This is a 4-part task: (1) create project with budget, (2) log hours, (3) supplier cost, (4) invoice",
+            "POST /project does NOT accept 'budget' field — use 'fixedprice' + 'isFixedPrice:true' instead",
+            "For timesheet: first call GET /activity/>forTimeSheet?projectId=X to find valid activities for the project",
+            "Do NOT use GET /activity?isGeneral=true — those general activities may NOT work for the specific project",
+            "Use DIFFERENT dates for each employee's timesheet entry to avoid 409 Duplicate Entry conflicts",
+            "Timesheet dates must be >= project startDate — cannot register hours before the project starts",
+            "Supplier cost: use POST /ledger/voucher with supplier+project linked in the expense posting (debit expense/credit AP 2400)",
+            "POST /invoice REQUIRES invoiceDueDate — set to invoiceDate + 30 days",
+            "vatType:{id:3} = 'Utgående avgift, høy sats' (25% output VAT) — standard for Norwegian invoices",
+            "The invoice order line amount should be the project budget (fixedprice) amount",
         ],
     },
     "task_30": {
         "description": "Simplified year-end closing: depreciation of multiple assets + prepaid expense reversal + tax provision",
         "golden_path": [
-            "Parse the prompt: extract asset names, costs, useful lives, accounts for each asset",
-            "GET /ledger/account?number=1200,1209,1210,1230,1250,1700,2920,6010,8700 (batch ALL accounts mentioned)",
-            "GET /ledger/voucherType (find correct voucher type)",
-            "For EACH ASSET: POST /ledger/voucher?sendToLedger=true — depreciation entry",
-            "  Debit: depreciation expense account (e.g. 6010), amount = cost / useful_life_years",
-            "  Credit: accumulated depreciation account (e.g. 1209), same amount",
-            "For PREPAID EXPENSES: POST /ledger/voucher?sendToLedger=true",
-            "  Debit: appropriate expense account, credit: 1700 (prepaid), full amount",
-            "For TAX PROVISION: First calculate taxable profit from GET /ledger (or use the amounts given)",
-            "  POST /ledger/voucher: Debit 8700 (tax expense), Credit 2920 (tax payable), amount = 22% × taxable profit",
+            "Step 1: Parse the prompt CAREFULLY — extract for EACH asset: name, cost (NOK), useful life (years), asset account number. Also extract prepaid amount and account 1700.",
+            "Step 2: Use calculate_accounting tool for EACH asset: calculate_accounting(operation='depreciation', cost=ASSET_COST, useful_life_years=YEARS) — this returns the exact annual amount, correctly rounded.",
+            "Step 3: GET /ledger/account?number=COMMA_SEPARATED_LIST — batch lookup ALL accounts mentioned in the prompt (asset accounts, 1209, 1700, 2920, 6010, 6300, 8700). Include 6300 for prepaid expense reversal. IMPORTANT: accounts 1209 and 8700 often DO NOT EXIST in the sandbox chart of accounts.",
+            "Step 4: If account 1209 is missing from results: POST /ledger/account with {number: 1209, name: 'Akkumulerte avskrivninger'}. If 8700 is missing: POST /ledger/account with {number: 8700, name: 'Skattekostnad'}. Create both in parallel if both are missing.",
+            "Step 5: POST /ledger/voucher?sendToLedger=true for EACH asset (3 SEPARATE vouchers, in parallel). Body: {date: '2025-12-31', description: 'Avskrivning ASSET_NAME 2025', postings: [{account: {id: ACCT_6010_ID}, amountGross: ANNUAL_AMOUNT, amountGrossCurrency: ANNUAL_AMOUNT, row: 1}, {account: {id: ACCT_1209_ID}, amountGross: -ANNUAL_AMOUNT, amountGrossCurrency: -ANNUAL_AMOUNT, row: 2}]}",
+            "Step 6: POST /ledger/voucher?sendToLedger=true for prepaid expense reversal. The expense account for 1700 (Forskuddsbetalt leiekostnad) is 6300 (Leie lokale). Body: {date: '2025-12-31', description: 'Oppløsning forskuddsbetalte kostnader 2025', postings: [{account: {id: ACCT_6300_ID}, amountGross: PREPAID_AMOUNT, amountGrossCurrency: PREPAID_AMOUNT, row: 1}, {account: {id: ACCT_1700_ID}, amountGross: -PREPAID_AMOUNT, amountGrossCurrency: -PREPAID_AMOUNT, row: 2}]}",
+            "Step 7: GET /balanceSheet?dateFrom=2025-01-01&dateTo=2026-01-01&accountNumberFrom=3000&accountNumberTo=8699 — returns per-account balances for ALL P&L accounts including the new depreciation and prepaid postings. Do NOT use the 'fields' parameter — it causes 400 errors (BalanceSheetAccountDTO only supports: account, balanceIn, balanceChange, balanceOut, startDate, endDate). Response: {values: [{account: {id, number, name}, balanceIn, balanceChange, balanceOut}, ...]}.",
+            "Step 8: Calculate taxable profit from balanceSheet response: Sum all 'balanceChange' values for accounts 3000-8699 (EXCLUDE 8700 if it appears — that's the tax expense account you haven't populated yet). Revenue accounts (3xxx) show NEGATIVE balanceChange (credit), expense accounts (4xxx-8xxx) show POSITIVE balanceChange (debit). Taxable profit = -1 * SUM(all balanceChange values). Tax = taxable_profit * 0.22. Round to 2 decimals. IMPORTANT: Use balanceChange (NOT balanceOut) since we want only 2025 P&L activity, not cumulative balance.",
+            "Step 9: POST /ledger/voucher?sendToLedger=true for tax provision. Body: {date: '2025-12-31', description: 'Skatteavsetning 2025 (22%)', postings: [{account: {id: ACCT_8700_ID}, amountGross: TAX_AMOUNT, amountGrossCurrency: TAX_AMOUNT, row: 1}, {account: {id: ACCT_2920_ID}, amountGross: -TAX_AMOUNT, amountGrossCurrency: -TAX_AMOUNT, row: 2}]}",
         ],
         "key_lessons": [
-            "EACH depreciation is a SEPARATE voucher (the prompt says this explicitly)",
-            "Annual depreciation = asset cost / useful life in years (linear method)",
-            "Common accounts: 6010 (depreciation expense), 1209 (accumulated depreciation for all asset types)",
-            "Asset accounts: 1200 (machinery), 1210 (IT equipment), 1230 (vehicles), 1250 (software)",
-            "Tax rate is 22% of taxable profit (standard Norwegian corporate tax rate)",
-            "To calculate taxable profit: you may need GET /ledger with dateFrom/dateTo to get total revenue - expenses",
-            "Or the prompt may give you the total prepaid amount and asset details — calculate from those",
-            "Postings row must start from 1 (auto-fixed), amountGross = amountGrossCurrency (auto-fixed)",
+            "CRITICAL: EACH depreciation is a SEPARATE voucher (the prompt says this explicitly). You need 3 depreciation vouchers + 1 prepaid + 1 tax = 5 vouchers total.",
+            "CRITICAL: Use calculate_accounting(operation='depreciation', cost=X, useful_life_years=Y) for EACH asset instead of manual math. It handles rounding correctly.",
+            "CRITICAL: Use GET /balanceSheet (NOT /ledger/postingByDate) to get P&L account totals for the tax calculation. The balanceSheet endpoint returns balanceIn/balanceChange/balanceOut per account — much more efficient than summing individual postings. Use 'balanceChange' for the P&L calculation.",
+            "CRITICAL: Accounts 1209 (accumulated depreciation) and 8700 (tax expense) are NOT in the default chart of accounts. You MUST check if they exist and create them if missing. Also check 2920 — it usually exists but may have a different name like 'Gjeld til selskap i samme konsern'.",
+            "CRITICAL: The expense account for prepaid rent reversal (1700 Forskuddsbetalt leiekostnad) should be 6300 (Leie lokale). If the prompt specifies a different expense account, use that instead.",
+            "Postings: row starts at 1 (never 0). amountGross = amountGrossCurrency. Positive = debit, negative = credit.",
+            "voucherType can be omitted (null) — Tripletex auto-assigns a default type.",
+            "Tax provision: Norwegian corporate tax rate is 22%. Taxable profit = revenue minus all expenses (including depreciation and prepaid reversal you just booked). The GET /balanceSheet call AFTER steps 5-6 will include those new postings.",
+            "IMPORTANT: The balanceSheet dateTo is EXCLUSIVE. Use dateTo=2026-01-01 to include all of 2025. accountNumberFrom and accountNumberTo filter the account range.",
+            "EFFICIENCY: Steps 2 (calculate) and 3 (GET accounts) can run in parallel. Steps 5 (3 depreciation vouchers) can run in parallel. Step 7 MUST wait for steps 5-6 to complete. Total: ~8-10 API calls.",
         ],
     },
 }
@@ -744,14 +900,18 @@ class RunHistoryService:
         logger.info(f"Built {len(self._playbooks)} task playbooks")
 
     def classify_prompt(self, prompt: str) -> tuple[str | None, float]:
-        """Classify prompt to task type using keyword scoring."""
-        prompt_lower = prompt.lower()
+        """Classify prompt to task type using keyword scoring.
+
+        Uses accent-insensitive matching so accented multilingual prompts
+        (e.g. Portuguese 'salário') match ASCII keywords ('salario').
+        """
+        prompt_lower = _strip_accents(prompt.lower())
         scores: dict[str, float] = {}
 
         for task_type, keyword_rules in TASK_KEYWORDS.items():
             score = 0.0
             for keywords, weight in keyword_rules:
-                if any(kw in prompt_lower for kw in keywords):
+                if any(_strip_accents(kw) in prompt_lower for kw in keywords):
                     score += weight
             if score > 0:
                 scores[task_type] = score
@@ -907,6 +1067,10 @@ class RunHistoryService:
         for task_type in TASK_KEYWORDS:
             curated = CURATED_PLAYBOOKS.get(task_type)
             runs = runs_by_task.get(task_type, [])
+
+            # Resolve aliases (e.g., task_21 → task_20)
+            if curated and "alias" in curated:
+                curated = CURATED_PLAYBOOKS.get(curated["alias"])
 
             if curated:
                 # Use curated playbook as base

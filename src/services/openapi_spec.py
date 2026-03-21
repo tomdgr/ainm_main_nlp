@@ -301,7 +301,7 @@ class OpenAPISpecSearcher:
                 ref_fields = [
                     k for k, v in ref_props.items()
                     if not v.get("readOnly", False) and v.get("type") in ("string", "integer", "number", "boolean", None)
-                ][:5]
+                ][:8]
                 if ref_fields:
                     prop_type = f"object {{{'|'.join(ref_fields)}}}"
                 else:

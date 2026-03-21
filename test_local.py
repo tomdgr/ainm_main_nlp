@@ -9,9 +9,11 @@ Usage:
     ./run_local.sh
 
     # Terminal 2: run tests
-    python test_local.py              # run all tasks
-    python test_local.py task_1       # run one task
+    python test_local.py                       # run all tasks (sequential)
+    python test_local.py -j 4                  # run all tasks, 4 at a time
+    python test_local.py task_1                # run one task
     python test_local.py task_1 task_4 task_6  # run specific tasks
+    python test_local.py -j 3 task_6 task_7 task_8  # 3 tasks in parallel
 
 The simulator is NOT a ground-truth scorer — it's a pre-validation step to catch
 regressions and verify the agent starts up and responds correctly.
@@ -94,8 +96,21 @@ def print_log_summary(log_path: str):
 async def main():
     from src.simulator.game_simulator import GameSimulator, ALL_TASKS
 
-    # Parse task IDs from command line
-    task_ids = sys.argv[1:] if len(sys.argv) > 1 else None
+    # Parse arguments: -j N for parallelism, rest are task IDs
+    args = sys.argv[1:]
+    parallel = 1
+    task_ids = []
+
+    i = 0
+    while i < len(args):
+        if args[i] == "-j" and i + 1 < len(args):
+            parallel = int(args[i + 1])
+            i += 2
+        else:
+            task_ids.append(args[i])
+            i += 1
+
+    task_ids = task_ids or None
 
     if task_ids:
         unknown = [t for t in task_ids if t not in ALL_TASKS]
@@ -108,6 +123,8 @@ async def main():
 
     print(f"Agent: {agent_url}")
     print(f"Tasks: {task_ids or list(ALL_TASKS.keys())}")
+    if parallel > 1:
+        print(f"Parallelism: {parallel} concurrent tasks")
     print()
 
     # Check agent is reachable
@@ -137,7 +154,7 @@ async def main():
 
     # Run simulator
     sim = GameSimulator(agent_url=agent_url)
-    report = await sim.run_all(task_ids=task_ids)
+    report = await sim.run_all(task_ids=task_ids, parallel=parallel)
 
     # Find and display new log files
     new_logs = []

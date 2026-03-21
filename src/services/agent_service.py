@@ -1,4 +1,6 @@
 import base64
+import csv
+import io
 import json
 import logging
 import os
@@ -7,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
 from anthropic import AsyncAnthropicVertex
-from pydantic_ai import Agent, RunContext, UsageLimits
+from pydantic_ai import Agent, BinaryContent, RunContext, UsageLimits
 from pydantic_ai.messages import ModelResponse, ThinkingPart
 from pydantic_ai.models.anthropic import AnthropicModel
 from pydantic_ai.providers.anthropic import AnthropicProvider
@@ -17,6 +19,7 @@ from src.prompts.system_prompt import get_system_prompt
 
 # from src.services.api_search import ApiSearchService
 from src.services.api_validator import APIValidator
+from src.services.pdf_extractor import extract_pdf_text
 from src.services.leaderboard import LeaderboardService
 from src.services.openapi_spec import OpenAPISpecSearcher
 from src.services.run_history import RunHistoryService
@@ -57,7 +60,7 @@ class AgentService:
         self.leaderboard = leaderboard
         self.sonnet_model = self._create_model("claude-sonnet-4-6")
         self.opus_model = self._create_model("claude-opus-4-6")
-        self.model = self.sonnet_model  # Sonnet for speed (< 300s timeout)
+        self.model = self.opus_model
         self.executor_agent = self._create_executor_agent()
 
     def _create_model(self, model_name: str = "claude-opus-4-6") -> AnthropicModel:
@@ -115,7 +118,7 @@ class AgentService:
             method: str,
             path: str,
             params: dict[str, str | int | bool] | None = None,
-            json_body: dict | None = None,
+            json_body: dict | list | None = None,
         ) -> str:
             """Make an API call to the Tripletex REST API.
 
@@ -126,7 +129,7 @@ class AgentService:
                 method: HTTP method (GET, POST, PUT, DELETE).
                 path: API path (e.g., "/employee", "/invoice/123/:payment").
                 params: Query parameters as key-value pairs.
-                json_body: Request body for POST/PUT as a dictionary.
+                json_body: Request body for POST/PUT. Usually a dict, but some endpoints (like PUT /supplierInvoice/voucher/{id}/postings) require a JSON array (list).
 
             Returns:
                 JSON string with {status_code, body, ok}.
@@ -180,13 +183,29 @@ class AgentService:
             # Truncate verbose 200/201 responses to reduce context growth
             if result.get("ok") and status in (200, 201):
                 value = result.get("body", {}).get("value")
-                if isinstance(value, dict) and len(json.dumps(value, default=str)) > 500:
+                if (
+                    isinstance(value, dict)
+                    and len(json.dumps(value, default=str)) > 500
+                ):
                     essential_keys = (
-                        "id", "version", "name", "number", "displayName",
-                        "invoiceNumber", "amount", "amountExcludingVat",
-                        "amountOutstanding", "startDate", "endDate",
-                        "supplierNumber", "customerNumber", "organizationNumber",
-                        "email", "invoiceEmail", "firstName", "lastName",
+                        "id",
+                        "version",
+                        "name",
+                        "number",
+                        "displayName",
+                        "invoiceNumber",
+                        "amount",
+                        "amountExcludingVat",
+                        "amountOutstanding",
+                        "startDate",
+                        "endDate",
+                        "supplierNumber",
+                        "customerNumber",
+                        "organizationNumber",
+                        "email",
+                        "invoiceEmail",
+                        "firstName",
+                        "lastName",
                     )
                     trimmed = {k: value[k] for k in essential_keys if k in value}
                     result["body"]["value"] = trimmed
@@ -234,12 +253,194 @@ class AgentService:
             ctx.deps.run_logger.log_tool_result("get_endpoint_detail", result)
             return result
 
+        @agent.tool
+        def parse_structured_data(
+            ctx: RunContext[AgentDeps],
+            content: str,
+            format: str = "csv",
+        ) -> str:
+            """Parse CSV, TSV, or semicolon-delimited text into structured JSON rows.
+
+            Use this instead of manually parsing tabular data in your reasoning.
+            Handles Norwegian number formats (comma as decimal separator).
+
+            Args:
+                ctx: The run context with dependencies.
+                content: The raw text content to parse (e.g., from a bank statement CSV).
+                format: Delimiter format — "csv" (comma), "tsv" (tab), or "ssv" (semicolon).
+
+            Returns:
+                JSON array of row objects with column headers as keys. Numbers are auto-parsed.
+            """
+            ctx.deps.run_logger.log_tool_call(
+                "parse_structured_data", {"format": format, "length": len(content)}
+            )
+            rows: list[dict] = []
+            try:
+                delimiter = {"csv": ",", "tsv": "\t", "ssv": ";"}.get(format, ",")
+                reader = csv.DictReader(
+                    io.StringIO(content.strip()), delimiter=delimiter
+                )
+                for row in reader:
+                    cleaned: dict = {}
+                    for k, v in row.items():
+                        if not k:
+                            continue
+                        k = k.strip()
+                        v = v.strip() if v else ""
+                        try:
+                            cleaned[k] = float(v.replace(" ", "").replace(",", "."))
+                        except (ValueError, AttributeError):
+                            cleaned[k] = v
+                    rows.append(cleaned)
+                result = json.dumps(rows, ensure_ascii=False, default=str)
+            except Exception as e:
+                result = json.dumps({"error": str(e)})
+            ctx.deps.run_logger.log_tool_result(
+                "parse_structured_data", f"{len(rows)} rows parsed"
+            )
+            return result
+
+        @agent.tool
+        def aggregate_postings(
+            ctx: RunContext[AgentDeps],
+            postings_json: str,
+            group_by: str = "account",
+        ) -> str:
+            """Aggregate ledger postings by account — returns per-account sums sorted by absolute amount.
+
+            Use this instead of manually summing postings in your reasoning. Pass the raw JSON
+            response body from GET /ledger/postingByDate or similar endpoints.
+
+            Args:
+                ctx: The run context with dependencies.
+                postings_json: JSON string — either the full API response body (with "values" wrapper)
+                    or a raw JSON array of posting objects.
+                group_by: Field to group by. Currently only "account" is supported.
+
+            Returns:
+                JSON array of {account_id, account_number, account_name, total_amount, count}
+                sorted by absolute total_amount descending.
+            """
+            ctx.deps.run_logger.log_tool_call(
+                "aggregate_postings", {"group_by": group_by}
+            )
+            try:
+                data = json.loads(postings_json)
+                postings = data.get("values", data) if isinstance(data, dict) else data
+
+                totals: dict[str, dict] = {}
+                for p in postings:
+                    acct = p.get("account", {})
+                    key = str(acct.get("id", "unknown"))
+                    if key not in totals:
+                        totals[key] = {
+                            "account_id": acct.get("id"),
+                            "account_number": acct.get("number"),
+                            "account_name": acct.get(
+                                "name", acct.get("displayName", "")
+                            ),
+                            "total_amount": 0.0,
+                            "count": 0,
+                        }
+                    totals[key]["total_amount"] = round(
+                        totals[key]["total_amount"] + p.get("amount", 0), 2
+                    )
+                    totals[key]["count"] += 1
+
+                sorted_totals = sorted(
+                    totals.values(), key=lambda x: abs(x["total_amount"]), reverse=True
+                )
+                result = json.dumps(sorted_totals, ensure_ascii=False, default=str)
+            except Exception as e:
+                result = json.dumps({"error": str(e)})
+            ctx.deps.run_logger.log_tool_result("aggregate_postings", result[:300])
+            return result
+
+        @agent.tool
+        def calculate_accounting(
+            ctx: RunContext[AgentDeps],
+            operation: str,
+            amount: float | None = None,
+            vat_rate: float | None = None,
+            cost: float | None = None,
+            useful_life_years: float | None = None,
+            period_months: int | None = None,
+            amounts: list[float] | None = None,
+        ) -> str:
+            """Perform accounting calculations — VAT, depreciation, posting validation.
+
+            Use this instead of calculating in your reasoning. Operations:
+            - "vat_from_gross": Split gross amount into net + VAT. Args: amount, vat_rate (default 0.25)
+            - "vat_from_net": Compute gross from net + VAT. Args: amount, vat_rate (default 0.25)
+            - "depreciation": Linear depreciation. Args: cost, useful_life_years, period_months
+            - "validate_postings": Check if amounts sum to zero. Args: amounts (list of floats)
+
+            Args:
+                ctx: The run context with dependencies.
+                operation: One of "vat_from_gross", "vat_from_net", "depreciation", "validate_postings".
+                amount: The amount for VAT operations.
+                vat_rate: VAT rate as decimal (0.25 for 25%). Defaults to 0.25.
+                cost: Asset cost for depreciation.
+                useful_life_years: Useful life in years for depreciation.
+                period_months: Number of months to depreciate (default 1).
+                amounts: List of posting amounts for validation.
+
+            Returns:
+                JSON with calculated values. All amounts rounded to 2 decimals.
+            """
+            ctx.deps.run_logger.log_tool_call(
+                "calculate_accounting", {"operation": operation}
+            )
+            try:
+                if operation == "vat_from_gross":
+                    rate = vat_rate or 0.25
+                    gross = amount
+                    net = round(gross / (1 + rate), 2)
+                    vat = round(gross - net, 2)
+                    result = {"gross": gross, "net": net, "vat": vat, "vat_rate": rate}
+                elif operation == "vat_from_net":
+                    rate = vat_rate or 0.25
+                    net = amount
+                    vat = round(net * rate, 2)
+                    gross = round(net + vat, 2)
+                    result = {"gross": gross, "net": net, "vat": vat, "vat_rate": rate}
+                elif operation == "depreciation":
+                    annual = round(cost / useful_life_years, 2)
+                    monthly = round(annual / 12, 2)
+                    period_total = round(monthly * (period_months or 1), 2)
+                    result = {
+                        "annual": annual,
+                        "monthly": monthly,
+                        "period_total": period_total,
+                        "cost": cost,
+                        "useful_life_years": useful_life_years,
+                    }
+                elif operation == "validate_postings":
+                    total = round(sum(amounts), 2)
+                    result = {
+                        "sum": total,
+                        "balanced": abs(total) < 0.01,
+                        "amounts": amounts,
+                    }
+                else:
+                    result = {"error": f"Unknown operation: {operation}"}
+                out = json.dumps(result, ensure_ascii=False)
+            except Exception as e:
+                out = json.dumps({"error": str(e)})
+            ctx.deps.run_logger.log_tool_result("calculate_accounting", out)
+            return out
+
     # ------------------------------------------------------------------
     # User message building
     # ------------------------------------------------------------------
 
     def _build_user_message(self, request: SolveRequest) -> str | list:
-        """Build the user message, including file attachments as multimodal content."""
+        """Build the user message, including file attachments as multimodal content.
+
+        Uses PydanticAI BinaryContent for proper Claude API document/image blocks.
+        PDFs get server-side text extraction (Layer 1) plus native PDF passthrough (Layer 2).
+        """
         if not request.files:
             return request.prompt
 
@@ -250,10 +451,22 @@ class AgentService:
 
             if f.mime_type.startswith("image/"):
                 parts.append(f"\n\n[Attached image: {f.filename}]")
-                parts.append(f"<image>{f.content_base64}</image>")
+                parts.append(BinaryContent(data=file_bytes, media_type=f.mime_type))
             elif f.mime_type == "application/pdf":
-                parts.append(f"\n\n[Attached PDF: {f.filename}]")
-                parts.append(f"<pdf>{f.content_base64}</pdf>")
+                # Layer 1: Server-side text extraction for reliable data access
+                extracted = extract_pdf_text(f.content_base64)
+                if extracted:
+                    parts.append(
+                        f"\n\n[PDF: {f.filename}]\nExtracted text:\n{extracted}"
+                    )
+                else:
+                    parts.append(
+                        f"\n\n[PDF: {f.filename} — text extraction failed, see document below]"
+                    )
+                # Layer 2: Native PDF document block for visual layout
+                parts.append(
+                    BinaryContent(data=file_bytes, media_type="application/pdf")
+                )
             else:
                 try:
                     text_content = file_bytes.decode("utf-8")
@@ -263,7 +476,7 @@ class AgentService:
                         f"\n\n[Attached binary file: {f.filename} ({len(file_bytes)} bytes)]"
                     )
 
-        return "\n".join(parts) if isinstance(parts[0], str) else parts
+        return parts
 
     # ------------------------------------------------------------------
     # Solve: classify → inject playbook → execute
@@ -293,11 +506,16 @@ class AgentService:
             task_type = None
             task_confidence = 0.0
             if self.run_history:
-                task_type, task_confidence = self.run_history.classify_prompt(request.prompt)
+                task_type, task_confidence = self.run_history.classify_prompt(
+                    request.prompt
+                )
                 lessons = self.run_history.get_lessons(request.prompt)
                 if lessons:
                     playbook_text = lessons
-                    run_logger.log("LESSONS", f"Injected playbook for {task_type} (confidence={task_confidence:.2f})")
+                    run_logger.log(
+                        "LESSONS",
+                        f"Injected playbook for {task_type} (confidence={task_confidence:.2f})",
+                    )
 
             deps = AgentDeps(
                 tripletex_client=client,
@@ -316,7 +534,10 @@ class AgentService:
             # For unknown tasks, the executor discovers endpoints inline.
 
             if playbook_text:
-                run_logger.log("PHASE", f"Executing with playbook ({task_type}, conf={task_confidence:.2f})")
+                run_logger.log(
+                    "PHASE",
+                    f"Executing with playbook ({task_type}, conf={task_confidence:.2f})",
+                )
                 context = (
                     f"=== TASK PLAYBOOK ===\n{playbook_text}\n=== END PLAYBOOK ===\n\n"
                     f"Follow this playbook as your guide. Use search_api_spec and get_endpoint_detail "

@@ -2,6 +2,68 @@
 
 Score progression and changes per Cloud Run revision. Only the latest revision's changes are uncommitted — older entries reflect what was deployed.
 
+## Revisions 00055–00056 — 2026-03-21
+
+**Score:** 75.36 → 77.74 (+2.38)
+
+**Key improvements on revision 00055:**
+- task_15: 3.00 → 4.00 (perfect — fixed price project)
+- task_21: 0.00 → 2.36 (first score! — supplier invoice from PDF, playbook + PDF fix working)
+- task_16: 4.00 → 4.00 (maintained)
+- task_24: 4.92 → 3.48 (benchmark recalculation — not a regression)
+
+**Key improvements on revision 00056:**
+- task_12: 1.00 → still investigating (payroll prereq chain fix deployed)
+- task_29: 1.64 → still investigating (project lifecycle keyword fix)
+- task_21: 2.36 → still investigating (continued runs)
+
+**Changes deployed (revisions 00055-00056):**
+- **9 playbook rewrites**: task_11 (supplier invoice two-step), task_12 (prescriptive prereq chain), task_13 (added `:deliver` step), task_20/21 (incomingInvoice → voucher+PUT postings), task_23 (paymentTypeId lookup + supplier ref), task_28 (unique activities per project), task_29 (keyword fix + sequential timesheets), task_30 (5-voucher with balanceSheet)
+- **Computation tools**: `parse_structured_data`, `aggregate_postings`, `calculate_accounting`
+- **Validator rules**: paymentTypeId=0 warning, invoiceDueDate required, project/orderline date required
+- **json_body: dict|list|None** — enables JSON array bodies for PUT /supplierInvoice/voucher/{id}/postings
+- **task_21 classifier fix** — removed duplicate keywords causing ambiguity penalty
+- **task_26 classifier fix** — added month-end closing keywords
+- **30/30 simulator tasks** — complete coverage with `-j N` parallel support
+
+**Local simulator results (all 30 tasks, -j 4):**
+- Total: 67.38/130.0 (51.8%)
+- Perfect scores: task_1, 2, 4, 5, 7, 14, 23, 24, 27, 28 (10 tasks)
+- Good scores: task_3, 6, 10, 12, 16, 17, 18, 19, 20, 22, 25, 29 (12 tasks)
+- Failed/timeout: task_8, 9, 11, 13, 15, 21, 26, 30 (8 tasks — 4 from concurrent overload)
+
+---
+
+## Revisions 00053–00054 — 2026-03-21
+
+**Score:** 65.26 → 75.36 (+10.10)
+
+**Key improvements:**
+- task_22: 0.00 → 4.50 (PDF receipt expense — pymupdf extraction confirmed working)
+- task_19: 0.60 → 2.59 (PDF employee contract — text extraction enables field extraction)
+- task_30: 0.00 → 1.80 (year-end closing — first score)
+- task_23: 0.00 → 0.60 (bank reconciliation — playbook injected, but server 500 errors)
+- task_27: 6.00 maintained (perfect tier 3)
+
+**Major changes:**
+- **Server-side PDF extraction** — `pymupdf` extracts text before sending to Claude. PDFs also passed as native `BinaryContent` document blocks (no more `<pdf>base64</pdf>` text strings). Eliminated FlateDecode thinking loops that exhausted tokens.
+- **Computation tools** — 3 new tools offload math/aggregation from LLM thinking:
+  - `parse_structured_data`: CSV/TSV/SSV parsing into structured JSON
+  - `aggregate_postings`: GROUP BY account + SUM amounts from ledger postings
+  - `calculate_accounting`: VAT (gross↔net), depreciation, posting balance validation
+- **Accent-insensitive classifier** — `unicodedata.normalize("NFKD")` strips diacritical marks. Portuguese `"salário"` now matches keyword `"salario"`.
+- **New playbooks**: task_20 (supplier invoice from PDF), task_21 (alias → task_20), task_23 (bank reconciliation from CSV)
+- **Playbook aliases** — `_build_playbooks()` resolves string values as aliases (e.g., task_21 → task_20)
+- **task_26 classifier strengthened** — added month-end closing keywords to prevent misclassification as task_12
+
+**Performance impact of computation tools:**
+- task_24: 349s → 70.7s (-80%), 450K → 296K tokens (-34%), 4 → 0 errors
+- task_28: `aggregate_postings` used for expense analysis
+
+**Simulator expanded** to 19 tasks: added task_3 (product), task_22 (PDF receipt), task_27 (PDF receipt variant)
+
+---
+
 ## Revisions 00048–00052 — 2026-03-21
 
 **Score:** 57.75 → 65.26 (+7.52)
@@ -9,32 +71,11 @@ Score progression and changes per Cloud Run revision. Only the latest revision's
 **Key improvements:**
 - task_16: 2.67 → 4.00 (perfect — timesheet + project invoice)
 - task_27: 0.60 → 6.00 (perfect tier 3 — receipt/expense)
-- task_22: 0.00 → 6.00 (perfect tier 3 — receipt expense, new playbook + keywords)
 - task_26: 3.21 → 4.00 (currency exchange)
-- task_16: 2.67 → 4.00 (perfect — timesheet + invoice)
-- task_09: 3.00 → 3.00 (1 new attempt, no change)
 
 **Architecture changes:**
-- **Removed planner entirely** — single-phase execution. Executor handles endpoint discovery + API calls inline. Eliminated 10-100s planner overhead.
-- **Removed dynamic effort routing** — `effort=medium` for all tasks. Low effort gave marginal gains on simple tasks but hurt complex ones.
-- **Removed effort routing misclassification risk** — task_29 was being routed to `low` effort because it was classified as task_08.
-
-**Confirmed working:**
-- Single-phase execution: all runs complete under 300s (0 timeouts on non-PDF tasks)
-- Playbook injection: logged as `[PHASE] Executing with playbook (task_XX, conf=X.XX)`
-- Response truncation: context growth stays manageable on multi-step tasks
-- API search: weighted scoring finds correct endpoints
-
-**Still failing (0 points):**
-- task_19, task_20, task_21: PDF extraction tasks — compressed PDF content exhausts thinking tokens
-- task_23: Unknown task requirements (supplier creation succeeds but scores 0)
-- task_30: Year-end depreciation, complex multi-step
-
-**Biggest remaining opportunities:**
-- PDF handling (tasks 19-21): 18.0 potential points. Server-side PDF extraction needed.
-- task_11 (supplier invoice): 0/4.0 — agent uses wrong approach despite 8 attempts
-- task_13 (travel expense): 1.375/4.0 — unknown scoring gap
-- task_29 (project lifecycle): 1.64/6.0 — partially working but too complex for single run
+- **Removed planner entirely** — single-phase execution. Eliminated 10-100s planner overhead.
+- **Removed dynamic effort routing** — `effort=medium` for all tasks.
 
 **Simulator expanded** to 16 tasks (was 8): added task_14 through task_18 and task_24 through task_26.
 

@@ -1,0 +1,24 @@
+20:33:27 | INFO     | src.services.agent_service | Solving task: Effectuez la clôture annuelle simplifiée pour 2025 : 1) Calculez et comptabilisez l'amortissement annuel de trois immobilisations : IT-utstyr (382600 NOK, 6 ans linéaire, compte 1210), Kjøretøy (178950 NOK, 9 ans, compte 1230), Inventar (444450 NOK, 9 ans, compte 1240). Utilisez le compte 6010 pour les charges d'amortissement et 1209 pour les amortissements cumulés. 2) Extournez les charges constatées d'avance (total 24200 NOK au compte 1700). 3) Calculez et comptabilisez la provision d'impôt (22 % du bénéfice imposable) sur compte 8700/2920. Comptabilisez chaque amortissement comme une pièce comptable séparée....
+20:33:27 | INFO     | src.services.run_history | Classified as task_30 (confidence=1.00), injecting playbook
+20:33:35 | INFO     | src.services.tripletex_client | API GET /ledger/account -> 200 (307ms) | calls=1 errors=0
+20:33:42 | INFO     | src.services.tripletex_client | API POST /ledger/account -> 201 (326ms) | calls=3 errors=0
+20:33:42 | INFO     | src.services.tripletex_client | API POST /ledger/account -> 201 (405ms) | calls=3 errors=0
+20:33:59 | INFO     | src.services.tripletex_client | API POST /ledger/voucher -> 201 (573ms) | calls=7 errors=0
+20:34:00 | INFO     | src.services.tripletex_client | API POST /ledger/voucher -> 201 (628ms) | calls=7 errors=0
+20:34:00 | INFO     | src.services.tripletex_client | API POST /ledger/voucher -> 201 (704ms) | calls=7 errors=0
+20:34:00 | INFO     | src.services.tripletex_client | API POST /ledger/voucher -> 201 (787ms) | calls=7 errors=0
+20:34:04 | INFO     | src.services.tripletex_client | API GET /balanceSheet -> 200 (485ms) | calls=8 errors=0
+20:34:06 | INFO     | src.services.api_validator | Note: POST /incomingInvoice is marked [BETA] — may return 403
+20:34:07 | INFO     | src.services.tripletex_client | API POST /incomingInvoice -> 403 (27ms) | calls=31 errors=17
+20:34:07 | WARNING  | src.services.tripletex_client | API error response: {"error": "Invalid or expired proxy token. Each submission receives a unique token - do not reuse tokens from previous submissions.", "source": "nmiai-proxy"}
+20:34:20 | INFO     | src.services.tripletex_client | API POST /ledger/voucher -> 201 (518ms) | calls=9 errors=0
+20:34:28 | INFO     | src.services.tripletex_client | API GET /ledger/voucher -> 403 (24ms) | calls=32 errors=18
+20:34:28 | WARNING  | src.services.tripletex_client | API error response: {"error": "Invalid or expired proxy token. Each submission receives a unique token - do not reuse tokens from previous submissions.", "source": "nmiai-proxy"}
+20:34:33 | INFO     | src.services.agent_service | Task completed in 66.7s | API calls: 9 | API errors: 0 | Token usage: RunUsage(input_tokens=80688, cache_write_tokens=12016, cache_read_tokens=30040, output_tokens=4526, details={'cache_creation_input_tokens': 12016, 'cache_read_input_tokens': 30040, 'input_tokens': 38632, 'output_tokens': 4526}, requests=7, tool_calls=13)
+20:34:33 | INFO     | src.services.agent_service | Starting background task detection (run ended at 2026-03-21T20:34:33.956182+00:00)...
+20:34:33 | INFO     | src.main | Solve completed in 66.7s
+20:34:34 | INFO     | src.services.leaderboard | Scores uploaded to gs://tripletex-ai-agent-logs/runs/tripletex-agent/tripletex-agent-00055-sr6/latest_scores.json
+20:34:34 | INFO     | src.services.leaderboard | No unclaimed match (try 1/5), retrying in 3.0s...
+20:34:37 | INFO     | src.services.leaderboard | Scores uploaded to gs://tripletex-ai-agent-logs/runs/tripletex-agent/tripletex-agent-00055-sr6/latest_scores.json
+20:34:37 | INFO     | src.services.leaderboard | Detected task: task_30 (attempt #6, try 2/5, claimed 2026-03-21T20:34:35.811690+00:00, score 1.80 → 1.80)
+20:34:37 | INFO     | src.services.agent_service | Background detection: task_30 (attempt #6, score 1.80 → 1.80)

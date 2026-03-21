@@ -9,60 +9,63 @@ The local HTTPS server must be running in another terminal:
 
 ## Usage
 
-Run the test script with specific tasks or all tasks:
-
 ```bash
-python test_local.py                                    # all 8 tasks
-python test_local.py task_1 task_2 task_4               # quick tier 1 (fast, ~30s total)
-python test_local.py task_6 task_7 task_8               # tier 2 original tasks
-python test_local.py task_9 task_10                     # new tier 2 tasks (voucher + employee)
-python test_local.py task_1 task_2 task_4 task_9 task_10 # comprehensive check
+python test_local.py                           # all 30 tasks (sequential)
+python test_local.py -j 4                      # all 30 tasks, 4 concurrent (recommended)
+python test_local.py task_1 task_2 task_4       # quick tier 1 (~30s)
+python test_local.py -j 3 task_6 task_7 task_8  # 3 tier 2 tasks in parallel
+python test_local.py task_22 task_23 task_28     # specific tier 3 tasks
 ```
 
-## Available simulator tasks
+Use `-j N` to run N tasks concurrently. Recommended: `-j 4` for full runs (~15 min vs ~45 min sequential).
 
-| Sim Task | Real Task | Name | Tier | What it tests |
-|----------|-----------|------|------|---------------|
-| task_1 | ~05 | Create Departments | 1 | Create 3 departments by name |
-| task_2 | ~02 | Create Customer | 1 | Customer with name, org number, address, email |
-| task_4 | ~04 | Create Supplier | 1 | Supplier via /supplier endpoint |
-| task_6 | ~06 | Create & Send Invoice | 2 | Customer + product + order + invoice + send |
-| task_7 | ~07 | Register Payment | 2 | Find existing invoice, register full payment |
-| task_8 | ~08 | Create Project | 2 | Project with customer and project manager |
-| task_9 | ~22 | Post Expense Voucher | 2 | Voucher posting with account, department, VAT |
-| task_10 | ~01/19 | Create Employee (Full) | 2 | Employee + employment + salary + occupation code |
+## All 30 simulator tasks
 
-## What to look for in the output
+| Task | Name | Tier | What it tests |
+|------|------|------|---------------|
+| task_1 | Create Departments | 1 | Create 3 departments by name |
+| task_2 | Create Customer | 1 | Customer with address, org number, email |
+| task_3 | Create Product | 1 | Product with number, price, VAT type |
+| task_4 | Create Supplier | 1 | Supplier with org number, emails |
+| task_5 | Create Departments | 1 | Same as task_1 (variant) |
+| task_6 | Invoice | 2 | Customer + product + order + invoice + send |
+| task_7 | Payment | 2 | Register payment on existing invoice |
+| task_8 | Project | 2 | Project with customer and project manager |
+| task_9 | Voucher | 2 | Expense voucher posting with VAT |
+| task_10 | Employee | 2 | Employee + employment + salary + occupation code |
+| task_11 | Supplier Invoice | 2 | Two-step: voucher + PUT supplierInvoice postings |
+| task_12 | Payroll | 2 | Salary with employment prerequisite chain |
+| task_13 | Travel Expense | 2 | Per diem + costs + deliver step |
+| task_14 | Credit Note | 2 | Credit note on existing invoice |
+| task_15 | Fixed Price Project | 2 | Fixed price project + partial invoice |
+| task_16 | Timesheet Invoice | 2 | Log hours + project invoice |
+| task_17 | Dimension Voucher | 2 | Accounting dimension + voucher |
+| task_18 | Reverse Payment | 2 | Reverse bank payment (returned) |
+| task_19 | Employee from PDF | 3 | PDF contract → employee + employment |
+| task_20 | Supplier Invoice PDF | 3 | PDF invoice → supplier + invoice |
+| task_21 | Supplier Invoice PDF | 3 | Same as task_20 (variant) |
+| task_22 | Receipt PDF | 3 | PDF receipt → expense voucher |
+| task_23 | Bank Reconciliation | 3 | CSV → match payments + vouchers |
+| task_24 | Ledger Correction | 3 | Find & correct 4 ledger errors |
+| task_25 | Overdue Invoice | 3 | Overdue + reminder + partial payment |
+| task_26 | Currency Exchange | 3 | Agio/disagio vouchers |
+| task_27 | Receipt PDF | 3 | Same as task_22 (variant) |
+| task_28 | Expense Analysis | 3 | Ledger analysis + projects + activities |
+| task_29 | Project Lifecycle | 3 | Project + timesheet + supplier + invoice |
+| task_30 | Year-End Closing | 3 | Depreciation + prepaid + tax provision |
 
-### 1. Simulator report
-The table at the end shows checks passed, API calls, errors, and scores per task. A regression shows as failed checks or new API errors.
-
-### 2. Run log analysis
-After the simulator report, the script scans newly created log files and prints:
-- **`[VALIDATION]` catches**: Pre-validator blocked a bad call (saved an API call). This is the validator working correctly.
-- **`[API] -> 4xx` errors**: Real API errors that got through. These cost points.
-- **Clean run**: No warnings and no errors — ideal.
-
-### 3. Key signals
+## What to look for
 
 | Signal | Meaning |
 |--------|---------|
-| All checks pass, 0 errors | Changes are safe to deploy |
-| Checks pass but new API errors | Agent works but efficiency dropped — investigate |
-| Validation catches + checks pass | Validator saved API calls — good |
-| Failed checks | Regression — do NOT deploy, investigate |
-| Task errors (exceptions) | Agent crashed — fix before deploying |
-
-## Reading the full run logs
-
-After running, logs are at:
-```
-src/logs/runs/local/{task_id}/no_0_YYYYMMDD_HHMMSS_run.txt     # agent decisions + API calls
-src/logs/runs/local/{task_id}/no_0_YYYYMMDD_HHMMSS_console.txt  # Python logging output
-```
+| All checks pass, 0 errors | Safe to deploy |
+| Checks pass but API errors | Works but efficiency dropped |
+| Validation catches + checks pass | Validator saving API calls (good) |
+| Failed checks | Regression — investigate before deploying |
+| Task errors (timeout) | Agent took too long — may work at lower parallelism |
 
 ## Important caveats
 
-- The simulator uses a **shared sandbox account** — state accumulates between runs. Some tasks may behave differently on a fresh account (like the competition provides).
-- The simulator covers only 6 of 30 task types. It cannot catch regressions in tasks it doesn't simulate (e.g., supplier invoices, travel expenses, credit notes).
-- Use this as a **pre-validation step** that things aren't broken, NOT as ground truth for scoring. Always verify with a real competition submission after deploying.
+- The simulator uses a **shared sandbox** — state accumulates. Some tasks may behave differently on a fresh account (like competition provides).
+- With `-j 4`, some tasks may timeout if the agent server is overloaded. Run them individually to verify.
+- This is a **pre-validation step**, not ground truth. Always verify with real competition submission after deploying.

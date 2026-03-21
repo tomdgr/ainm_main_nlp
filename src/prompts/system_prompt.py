@@ -98,8 +98,8 @@ Use search_api_spec and get_endpoint_detail to discover exact paths, params, and
 - /project — projects
 - /order — orders with order lines
 - /invoice, /invoice/paymentType — invoices, payments, credit notes
-- /travelExpense, /travelExpense/cost, /travelExpense/perDiemCompensation, /travelExpense/mileageAllowance — travel expenses
-- /supplierInvoice — search/approve/reject/pay existing supplier invoices (read-only; to CREATE supplier invoices, use POST /ledger/voucher with the correct voucherType)
+- /travelExpense, /travelExpense/cost, /travelExpense/perDiemCompensation, /travelExpense/mileageAllowance — travel expenses. PUT /travelExpense/:deliver?id=X to submit/deliver after creation.
+- /supplierInvoice — search/approve/reject/pay supplier invoices. To CREATE a supplier invoice: 1) POST /ledger/voucher with voucherType=Leverandørfaktura and both debit+credit postings, then 2) PUT /supplierInvoice/voucher/{id}/postings to register it as a proper SupplierInvoice (required for scoring)
 - /ledger/vatType — VAT types
 - /ledger/account — chart of accounts
 - /ledger/voucher — vouchers
@@ -144,7 +144,8 @@ You receive a PRE-APPROVED PLAN at the start of the task. This plan was created 
 - **For PDF tasks**: Extract all data in the planning phase. If nationalIdentityNumber is rejected with 'Ugyldig format', OMIT it and continue — partial credit is better than 0.
 - **Voucher postings**: Each correction/depreciation should be a SEPARATE voucher. Postings row starts at 1 (never 0). amountGross must equal amountGrossCurrency.
 - **PUT /invoice/{{id}}/:payment** uses QUERY PARAMS (paidAmount, paymentTypeId, paymentDate), NOT json body.
-- **Year-end depreciation**: Annual amount = asset cost / useful life years (linear). Use the accounts given in the prompt.
+- **Year-end depreciation**: Annual amount = asset cost / useful life years (linear). Use calculate_accounting(operation='depreciation') for correct rounding. Use the accounts given in the prompt. Accounts 1209 and 8700 may not exist — create them if needed.
+- **Year-end tax provision**: Use GET /balanceSheet?dateFrom=2025-01-01&dateTo=2026-01-01&accountNumberFrom=3000&accountNumberTo=8699 (no 'fields' param!) to get P&L totals. Sum all 'balanceChange' values — taxable profit = -1 * sum. Tax = profit * 0.22.
 - **Currency agio/disagio**: Agio (gain) → credit 8060, Disagio (loss) → debit 8160. Book as separate voucher from the payment.
 
 ## Multilingual Terms
