@@ -34,9 +34,12 @@ class LeaderboardService:
     TEAM_ID = "3b61f6c8-acfb-4833-a39f-959ab17fe224"
 
     def __init__(self, api_base: str = "https://api.ainm.no"):
+        self._api_base = api_base
         self._url = f"{api_base}/tripletex/leaderboard/{self.TEAM_ID}"
+        self._submissions_url = f"{api_base}/tripletex/my/submissions"
         self._initial_saved = False
         self._claimed: set[tuple[str, str]] = set()  # (task_id, last_attempt_at)
+        self._claimed_submissions: set[str] = set()  # submission IDs already matched
         self._lock = asyncio.Lock()
         self._prev_scores: dict[str, float] = {}  # task_id -> last known best_score
 
@@ -141,6 +144,134 @@ class LeaderboardService:
                 best_score = task.get("best_score", 0.0)
 
         return best_task_id, best_attempts, best_attempt_at, best_score
+
+    async def _fetch_submissions(self) -> list[dict] | None:
+        """Fetch all submissions from the API."""
+        try:
+            access_token = os.getenv("ACCESS_TOKEN", "")
+            headers = {"Authorization": f"Bearer {access_token}"} if access_token else {}
+
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.get(self._submissions_url, headers=headers)
+                if resp.status_code != 200:
+                    logger.warning(f"Submissions API returned {resp.status_code}")
+                    return None
+                data = resp.json()
+
+            if not isinstance(data, list):
+                return None
+            return data
+        except Exception as e:
+            logger.error(f"Submissions fetch failed: {e}")
+            return None
+
+    def _save_submissions_snapshot(self, submissions: list[dict]):
+        """Save the full submissions list alongside the revision's score files."""
+        storage = os.getenv("LOG_STORAGE", "local")
+        subdir = _revision_log_dir()
+        data = {
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "count": len(submissions),
+            "submissions": submissions,
+        }
+
+        if storage == "gcs":
+            bucket_name = os.getenv("LOG_BUCKET", "")
+            if bucket_name:
+                try:
+                    from google.cloud import storage as gcs
+                    client = gcs.Client()
+                    bucket = client.bucket(bucket_name)
+                    blob = bucket.blob(f"{subdir}/submissions.json")
+                    blob.upload_from_string(
+                        json.dumps(data, indent=2, ensure_ascii=False),
+                        content_type="application/json",
+                    )
+                    return
+                except Exception as e:
+                    logger.error(f"Failed to upload submissions to GCS: {e}")
+
+        # Local fallback
+        log_dir = os.path.join(LOG_BASE, subdir)
+        os.makedirs(log_dir, exist_ok=True)
+        path = os.path.join(log_dir, "submissions.json")
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+    async def fetch_submission_feedback(
+        self, run_end_time: datetime, max_age_s: float = 120.0,
+        leaderboard_score: float | None = None,
+    ) -> dict | None:
+        """Fetch the submission feedback for a run that completed near run_end_time.
+
+        Uses claim-based dedup (like detect_task) to avoid matching the same
+        submission to multiple concurrent runs. Validates that the feedback score
+        is plausible given the leaderboard best score.
+
+        Args:
+            run_end_time: When the agent run finished.
+            max_age_s: Max seconds between run_end_time and submission completed_at.
+            leaderboard_score: The leaderboard best_score AFTER this run. If set,
+                candidates with normalized_score > leaderboard_score are rejected
+                (impossible — leaderboard tracks the best).
+
+        Returns:
+            The matching submission dict or None if no match found.
+        """
+        async with self._lock:
+            submissions = await self._fetch_submissions()
+            if not submissions:
+                return None
+
+            # Save full snapshot for later analysis
+            self._save_submissions_snapshot(submissions)
+
+            # Build list of candidates: completed, within time window, not yet claimed
+            candidates: list[tuple[timedelta, dict]] = []
+            for sub in submissions:
+                sub_id = sub.get("id", "")
+                completed_at_str = sub.get("completed_at")
+                if not completed_at_str or sub.get("status") != "completed":
+                    continue
+                if sub_id in self._claimed_submissions:
+                    continue
+
+                completed_at = datetime.fromisoformat(completed_at_str)
+                if completed_at.tzinfo is None:
+                    completed_at = completed_at.replace(tzinfo=timezone.utc)
+
+                diff = abs(run_end_time - completed_at)
+                if diff > timedelta(seconds=max_age_s):
+                    continue
+
+                # Plausibility check: a run's score can't exceed the leaderboard best
+                # (since the leaderboard would have updated to reflect a higher score)
+                if leaderboard_score is not None:
+                    norm = sub.get("normalized_score", 0)
+                    if norm > leaderboard_score + 0.01:  # small tolerance for rounding
+                        continue
+
+                candidates.append((diff, sub))
+
+            if not candidates:
+                return None
+
+            # Sort by proximity to run_end_time, pick closest
+            candidates.sort(key=lambda x: x[0])
+            best_match = candidates[0][1]
+
+            # Claim it so concurrent detections don't grab the same one
+            claimed_id = best_match.get("id", "")
+            if claimed_id:
+                self._claimed_submissions.add(claimed_id)
+                logger.info(
+                    f"Claimed submission {claimed_id} "
+                    f"(score={best_match.get('normalized_score')}, "
+                    f"{len(candidates)} candidates, "
+                    f"delta={candidates[0][0].total_seconds():.1f}s)"
+                )
+
+            return best_match
 
     async def detect_task(
         self,

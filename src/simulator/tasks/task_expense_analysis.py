@@ -1,4 +1,9 @@
-"""Task 28: Analyze expense increase between months and create internal projects with activities."""
+"""Task 28: Analyze expense increase between months and create internal projects with activities.
+
+NOTE: These checks are APPROXIMATIONS. The real competition scorer likely has stricter
+validation for account identification accuracy, activity uniqueness, and project-activity
+linkage. Local pass ≠ competition pass.
+"""
 
 from src.simulator.models import Check
 from src.simulator.tasks.base import BaseTask

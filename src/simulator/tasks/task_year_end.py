@@ -1,4 +1,9 @@
-"""Task 30: Simplified year-end closing with depreciation + tax provision."""
+"""Task 30: Simplified year-end closing with depreciation + tax provision.
+
+NOTE: These checks are APPROXIMATIONS. The real competition scorer likely validates
+exact depreciation amounts, correct account pairs per asset, and precise tax calculations.
+The seeded data here differs from competition sandboxes. Local pass ≠ competition pass.
+"""
 
 from src.simulator.models import Check
 from src.simulator.tasks.base import BaseTask

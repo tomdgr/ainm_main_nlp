@@ -91,6 +91,14 @@ class OpenAPISpecSearcher:
         "department": {"avdeling", "abteilung", "département"},
         "project": {"prosjekt", "projekt", "proyecto", "projet"},
         "voucher": {"bilag", "beleg", "écriture", "asiento"},
+        "receipt": {"kvittering", "quittung", "recibo", "reçu", "ricevuta"},
+        "salary": {"lønn", "gehalt", "salaire", "salario", "salário", "stipendio"},
+        "travel": {"reise", "voyage", "viaje", "viagem"},
+        "mileage": {"kjøregodtgjørelse", "kilometergeld", "kilométrage"},
+        "reconciliation": {"avstemming", "abstimmung", "rapprochement", "conciliación", "conciliação"},
+        "payroll": {"gehaltsabrechnung", "paie", "nómina", "folha"},
+        "depreciation": {"avskrivning", "abschreibung", "amortissement", "depreciación", "depreciação"},
+        "reminder": {"purring", "mahnung", "rappel", "recordatorio"},
     }
 
     # Method keywords that indicate HTTP method preference

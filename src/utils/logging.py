@@ -95,6 +95,7 @@ class RunLogger:
         self._run_buf = io.StringIO()
         self._console_buf = io.StringIO()
         self._files: list[tuple[str, bytes]] = []  # (filename, raw_bytes)
+        self.submission_feedback: dict | None = None  # Set by _detect_and_save
 
         # Attach a logging handler that captures console output for this run
         self._log_handler = logging.StreamHandler(self._console_buf)
@@ -215,11 +216,16 @@ class RunLogger:
 
         # Save file attachments (PDFs, images, etc.)
         for filename, raw_bytes in self._files:
-            # Sanitize filename and prepend the run prefix
             safe_name = filename.replace("/", "_").replace("\\", "_")
             file_path = os.path.join(log_dir, f"{prefix}_{safe_name}")
             with open(file_path, "wb") as f:
                 f.write(raw_bytes)
+
+        # Save submission feedback JSON if available
+        if self.submission_feedback:
+            feedback_path = os.path.join(log_dir, f"{prefix}_feedback.json")
+            with open(feedback_path, "w") as f:
+                json.dump(self.submission_feedback, f, indent=2, ensure_ascii=False)
 
         logging.getLogger(__name__).info(
             f"Run logs saved: {run_path}"
@@ -255,6 +261,14 @@ class RunLogger:
                 ext = os.path.splitext(safe_name)[1].lower()
                 ct = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg"}.get(ext, "application/octet-stream")
                 file_blob.upload_from_string(raw_bytes, content_type=ct)
+
+            # Upload submission feedback JSON if available
+            if self.submission_feedback:
+                fb_blob = bucket.blob(f"{subdir}/{file_prefix}_feedback.json")
+                fb_blob.upload_from_string(
+                    json.dumps(self.submission_feedback, indent=2, ensure_ascii=False),
+                    content_type="application/json",
+                )
 
             logging.getLogger(__name__).info(
                 f"Run logs uploaded to gs://{bucket_name}/{subdir}/{file_prefix}_*.txt"

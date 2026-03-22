@@ -42,6 +42,7 @@ from src.simulator.tasks.task_project_lifecycle import ProjectLifecycleTask
 from src.simulator.tasks.task_year_end import YearEndTask
 from src.simulator.tasks.task_employee_pdf import EmployeePDFTask
 from src.simulator.tasks.task_supplier_invoice_pdf import SupplierInvoicePDFTask
+from src.simulator.tasks.task_offer_letter import OfferLetterTask
 
 ALL_TASKS = {
     # Tier 1
@@ -76,7 +77,7 @@ ALL_TASKS = {
     "task_30": YearEndTask("task_30"),                     # Year-end closing: depreciation + tax provision
     "task_19": EmployeePDFTask("task_19"),                   # Employee from PDF employment contract
     "task_20": SupplierInvoicePDFTask("task_20"),             # Supplier invoice from PDF (leverandørfaktura)
-    "task_21": SupplierInvoicePDFTask("task_21"),             # Same as task_20 (supplier invoice PDF)
+    "task_21": OfferLetterTask("task_21"),                      # Employee from offer letter PDF (tilbudsbrev)
 }
 
 

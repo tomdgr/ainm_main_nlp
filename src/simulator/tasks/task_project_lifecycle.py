@@ -1,4 +1,9 @@
-"""Task 29: Full project lifecycle — budget + hours + supplier costs + customer invoice."""
+"""Task 29: Full project lifecycle — budget + hours + supplier costs + customer invoice.
+
+NOTE: These checks are APPROXIMATIONS. The real competition scorer likely checks additional
+fields (per-employee hours, hourly rates, project-invoice linkage, specific account numbers)
+that this simulator does not verify. Local pass ≠ competition pass.
+"""
 
 import re
 

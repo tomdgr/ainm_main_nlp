@@ -1,4 +1,10 @@
-"""Base class for task definitions."""
+"""Base class for task definitions.
+
+IMPORTANT: The simulator checks are APPROXIMATIONS of the real competition scoring.
+The actual competition server has its own scoring logic that we cannot inspect.
+Local simulator results should be used for smoke-testing and catching regressions,
+NOT as ground truth for task correctness. Always verify with real competition runs.
+"""
 
 from abc import ABC, abstractmethod
 
