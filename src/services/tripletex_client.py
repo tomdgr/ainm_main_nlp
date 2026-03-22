@@ -24,6 +24,66 @@ class TripletexClient:
         self.error_count = 0
         self.run_logger = run_logger
 
+    async def upload_file(
+        self,
+        path: str,
+        params: dict | None = None,
+        file_content: bytes = b"",
+        file_name: str = "file.csv",
+        content_type: str = "text/csv",
+    ) -> dict:
+        """Upload a file via multipart POST. Returns {status_code, body, ok}."""
+        url = f"{self.base_url}{path}"
+        self.call_count += 1
+
+        start = time.monotonic()
+        try:
+            response = await self.client.post(
+                url=url,
+                auth=self.auth,
+                params=params,
+                files={"file": (file_name, file_content, content_type)},
+            )
+            duration_ms = (time.monotonic() - start) * 1000
+
+            try:
+                body = response.json()
+            except Exception:
+                body = response.text
+
+            is_ok = response.status_code < 400
+            if not is_ok:
+                self.error_count += 1
+
+            logger.info(
+                f"API POST {path} (upload) -> {response.status_code} ({duration_ms:.0f}ms)"
+                f" | calls={self.call_count} errors={self.error_count}"
+            )
+            if not is_ok:
+                logger.warning(f"API error response: {json.dumps(body, ensure_ascii=False, default=str)[:500]}")
+
+            if self.run_logger:
+                body_preview = json.dumps(body, ensure_ascii=False, default=str)
+                self.run_logger.log_api_call("POST", path, response.status_code, duration_ms, body_preview)
+
+            return {
+                "status_code": response.status_code,
+                "body": body,
+                "ok": is_ok,
+            }
+
+        except httpx.HTTPError as e:
+            duration_ms = (time.monotonic() - start) * 1000
+            self.error_count += 1
+            logger.error(f"API POST {path} (upload) -> HTTP error ({duration_ms:.0f}ms): {e}")
+            if self.run_logger:
+                self.run_logger.log_api_call("POST", path, 0, duration_ms, str(e))
+            return {
+                "status_code": 0,
+                "body": {"error": str(e)},
+                "ok": False,
+            }
+
     async def request(
         self,
         method: str,

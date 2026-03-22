@@ -1057,6 +1057,121 @@ class AgentService:
             return result
 
         @agent.tool
+        async def import_bank_statement(
+            ctx: RunContext[AgentDeps],
+            csv_content: str,
+            bank_account_id: int,
+            from_date: str,
+            to_date: str,
+        ) -> str:
+            """Convert a bank statement CSV to Danske Bank format and import it into Tripletex.
+
+            Args:
+                csv_content: The raw CSV text (semicolon-separated: Dato;Forklaring;Inn;Ut;Saldo).
+                bank_account_id: The ledger account ID for the bank account (1920).
+                from_date: Start date of the statement (YYYY-MM-DD).
+                to_date: End date of the statement (YYYY-MM-DD).
+
+            Returns the import result including the bank statement ID.
+            """
+            ctx.deps.run_logger.log_tool_call("import_bank_statement", {
+                "bank_account_id": bank_account_id,
+                "from_date": from_date,
+                "to_date": to_date,
+            })
+            client = ctx.deps.tripletex_client
+
+            try:
+                import re as _re
+                # Parse the task CSV (Dato;Forklaring;Inn;Ut;Saldo)
+                lines = [l.strip() for l in csv_content.strip().split("\n") if l.strip()]
+                if not lines:
+                    return json.dumps({"error": "Empty CSV"})
+
+                # Skip header line
+                header = lines[0].lower()
+                data_lines = lines[1:] if "dato" in header or "forklaring" in header else lines
+
+                # Convert to Danske Bank CSV format
+                danske_lines = [
+                    "Bokf\u00f8rt dato;Rentedato;Tekst;Bel\u00f8p i NOK;Bokf\u00f8rt saldo i NOK;Status"
+                ]
+                for line in data_lines:
+                    parts = line.split(";")
+                    if len(parts) < 5:
+                        continue
+                    dato = parts[0].strip()
+                    forklaring = parts[1].strip()
+                    inn = parts[2].strip()
+                    ut = parts[3].strip()
+                    saldo = parts[4].strip()
+
+                    # Convert date from YYYY-MM-DD to DD.MM.YYYY if needed
+                    if _re.match(r"\d{4}-\d{2}-\d{2}", dato):
+                        y, m, d = dato.split("-")
+                        dato_dk = f"{d}.{m}.{y}"
+                    else:
+                        dato_dk = dato  # already DD.MM.YYYY
+
+                    # Determine amount (Inn = positive, Ut = negative)
+                    if inn and inn.replace(".", "").replace(",", "").replace("-", "").strip():
+                        amount = inn.strip()
+                    elif ut and ut.replace(".", "").replace(",", "").replace("-", "").strip():
+                        amount = ut.strip()
+                        if not amount.startswith("-"):
+                            amount = f"-{amount}"
+                    else:
+                        continue
+
+                    # Convert decimal from dot to comma for Norwegian format
+                    amount = amount.replace(".", ",")
+                    saldo_nok = saldo.replace(".", ",") if saldo else "0,00"
+
+                    danske_lines.append(
+                        f"{dato_dk};{dato_dk};{forklaring};{amount};{saldo_nok};utf\u00f8rt"
+                    )
+
+                danske_csv = "\n".join(danske_lines) + "\n"
+                # Encode as ISO-8859-1 (required by the API)
+                csv_bytes = danske_csv.encode("iso-8859-1")
+
+                # Upload to Tripletex
+                resp = await client.upload_file(
+                    path="/bank/statement/import",
+                    params={
+                        "bankId": 76,  # Danske Bank
+                        "accountId": bank_account_id,
+                        "fromDate": from_date,
+                        "toDate": to_date,
+                        "fileFormat": "DANSKE_BANK_CSV",
+                    },
+                    file_content=csv_bytes,
+                    file_name="bankutskrift.csv",
+                    content_type="text/csv",
+                )
+                ctx.deps.call_history.append(
+                    f"POST /bank/statement/import -> {resp.get('status_code')}"
+                )
+
+                if resp.get("ok"):
+                    result = json.dumps({
+                        "status_code": resp["status_code"],
+                        "body": resp["body"],
+                        "message": "Bank statement imported successfully",
+                    })
+                else:
+                    result = json.dumps({
+                        "status_code": resp.get("status_code"),
+                        "error": str(resp.get("body", ""))[:500],
+                        "message": "Bank statement import failed",
+                    })
+            except Exception as e:
+                result = json.dumps({"error": str(e)})
+
+            ctx.deps.run_logger.log_tool_result("import_bank_statement", result)
+            return result
+
+        @agent.tool
         async def setup_employee_for_payroll(
             ctx: RunContext[AgentDeps],
             employee_id: int,

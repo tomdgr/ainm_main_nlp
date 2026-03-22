@@ -337,6 +337,10 @@ class APIValidator:
                 json_body["departmentNumber"] = "1"
                 logger.info("Auto-set departmentNumber='1' on POST /department")
 
+        # Rule 20: POST /project/hourlyRates — always 409. Redirect to GET+PUT.
+        if method_upper == "POST" and "/project/hourlyRates" in path:
+            warnings.append("POST /project/hourlyRates ALWAYS returns 409 (Tripletex auto-creates a default rate). You MUST use GET /project/hourlyRates?projectId=X to find the existing entry, then PUT /project/hourlyRates/{id} to update it with your fixedRate.")
+
     def _fix_amount_gross_currency(self, body: dict):
         """Auto-fix amountGross/amountGrossCurrency mismatch in postings.
 
